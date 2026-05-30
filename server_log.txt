@@ -1,0 +1,40 @@
+
+> insight-learning-hub@0.0.0 dev
+> tsx server.ts
+
+API key exists: true
+API key length: 39
+API key exists: true
+API key length: 39
+Server running on http://localhost:3000
+Generate kit request body: {"sourceType":"image","imageBase64":"[TRUNCATED]","mimeType":"image/jpeg"}
+API key exists: true
+Received upload/sourceType: image
+Resolved topic: Extracted from image
+Calling Gemini...
+Gemini error response: {"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}
+Gemini invocation failed: Error: This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.
+    at callGemini (E:\insight-learning-hub-v3\server.ts:155:13)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async <anonymous> (E:\insight-learning-hub-v3\server.ts:378:38)
+Generate kit request body: {"sourceType":"image","imageBase64":"[TRUNCATED]","mimeType":"image/jpeg"}
+API key exists: true
+Received upload/sourceType: image
+Resolved topic: Extracted from image
+Calling Gemini...
+Parsed revision kit successfully. Extracting keys.
+[2m13:29:58[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/views/MistakesNotebook.tsx, /src/index.css[22m
+[2m13:30:06[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/views/MistakesNotebook.tsx, /src/index.css[22m
+[2m13:30:13[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/views/MistakesNotebook.tsx, /src/index.css[22m
+[2m13:30:18[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/views/LibraryView.tsx, /src/index.css[22m
+[2m13:30:21[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/views/LibraryView.tsx, /src/index.css[22m
+[2m13:30:40[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/views/LibraryView.tsx, /src/index.css[22m
+[2m13:30:45[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m
+[2m13:30:51[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m
+[2m13:30:59[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/index.css[22m
+Generate kit request body: {"sourceType":"image","imageBase64":"[TRUNCATED]","mimeType":"image/jpeg"}
+API key exists: true
+Received upload/sourceType: image
+Resolved topic: Extracted from image
+Calling Gemini...
+Parsed revision kit successfully. Extracting keys.
