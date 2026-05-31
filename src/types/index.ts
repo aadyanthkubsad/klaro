@@ -158,10 +158,12 @@ export interface DailyTask {
   topic: string;
   /** Chapter name — falls back to topic when not derivable. Used in Library mode tiles. */
   chapter?: string;
+  subject?: string;
   reason: string;
   dueDate: string;
   estimatedMinutes: number;
   status: 'pending' | 'completed';
+  completedDate?: string;
   actionType: TaskActionType;
   sourceQuizId?: string;
   sourceKitId?: string;

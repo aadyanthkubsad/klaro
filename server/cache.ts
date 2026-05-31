@@ -55,6 +55,7 @@ export function buildCacheKey(params: {
   language?: string;
   noteStyle?: string;
   examMode?: string;
+  voiceStyle?: string;
 }): string {
   const parts = [
     params.endpoint,
@@ -65,6 +66,7 @@ export function buildCacheKey(params: {
     params.language || '',
     params.noteStyle || '',
     params.examMode || '',
+    params.voiceStyle || '',
   ];
   return parts.map(p => (p || '').toLowerCase().trim()).join('::');
 }

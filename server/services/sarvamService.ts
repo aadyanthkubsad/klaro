@@ -17,7 +17,7 @@ import { logger } from '../logger.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export type VoiceStyle = 'clear-teacher' | 'friendly-tutor' | 'exam-coach' | 'story-mode';
+export type VoiceStyle = 'clear-teacher' | 'friendly-tutor' | 'exam-coach' | 'story-mode' | 'clear-narrator';
 export type AudioLanguage = 'en-IN' | 'hi-IN' | 'hinglish';
 
 export interface GenerateAudioParams {
@@ -45,6 +45,7 @@ const VOICE_MAP: Record<VoiceStyle, { speaker: string; pace: number; pitch: numb
   'friendly-tutor': { speaker: 'manisha', pace: 1.1, pitch: 0 },
   'exam-coach':     { speaker: 'abhilash', pace: 1.15, pitch: 0 },
   'story-mode':     { speaker: 'karun', pace: 0.9, pitch: 0 },
+  'clear-narrator': { speaker: 'anushka', pace: 0.95, pitch: 0 },
 };
 
 // Sarvam model to use
@@ -146,9 +147,9 @@ function splitScript(text: string, maxLen: number): string[] {
  */
 function sanitiseForTTS(text: string): string {
   return text
-    // ── Pause markers → natural sentence breaks for TTS ────────────
-    .replace(/\[long pause\]/gi, '. ')
-    .replace(/\[medium pause\]/gi, '. ')
+    // ── Pause markers → graded sentence breaks for TTS ─────────────
+    .replace(/\[long pause\]/gi, '. . . ')
+    .replace(/\[medium pause\]/gi, '. . ')
     .replace(/\[short pause\]/gi, '. ')
     .replace(/\[pause\]/gi, '. ')
 

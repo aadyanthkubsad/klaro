@@ -364,7 +364,8 @@ function tasksFromAttempt(attempt: QuizAttempt, sourceKitId?: string): DailyTask
     sourceKitId,
     modeUsed: attempt.modeUsed,
     status: 'pending' as const,
-    chapter: attempt.topic,
+    chapter: attempt.chapterTitle || attempt.topic,
+    subject: attempt.subject,
   };
 
   // Day-0 free tasks — every student gets these (mistake review + targeted retests).
@@ -534,8 +535,46 @@ export function recordCompletedQuiz(input: RecordQuizInput): QuizAttempt {
 // ─── task actions ────────────────────────────────────────────────────────────
 
 export function setTaskStatus(id: string, status: 'pending' | 'completed') {
-  const tasks = getDailyTasks().map((t) => (t.id === id ? { ...t, status } : t));
+  const tasks = getDailyTasks().map((t) =>
+    t.id === id
+      ? { ...t, status, ...(status === 'completed' ? { completedDate: new Date().toISOString() } : {}) }
+      : t
+  );
   write(STORAGE_KEYS.dailyTasks, tasks);
+}
+
+// ─── task stats & grouping helpers ──────────────────────────────────────────
+
+export interface TaskStats {
+  todayCount: number;
+  upcomingCount: number;
+  completedCount: number;
+  overdueCount: number;
+}
+
+export function getTaskStats(): TaskStats {
+  const tasks = getDailyTasks();
+  const today = new Date().toISOString().slice(0, 10);
+  let todayCount = 0, upcomingCount = 0, completedCount = 0, overdueCount = 0;
+  for (const t of tasks) {
+    if (t.status === 'completed') { completedCount++; continue; }
+    const due = t.dueDate.slice(0, 10);
+    if (due < today) overdueCount++;
+    else if (due === today) todayCount++;
+    else upcomingCount++;
+  }
+  return { todayCount: todayCount + overdueCount, upcomingCount, completedCount, overdueCount };
+}
+
+export function getTasksByChapter(tasks: DailyTask[]): Map<string, DailyTask[]> {
+  const groups = new Map<string, DailyTask[]>();
+  for (const t of tasks) {
+    const key = t.chapter || t.topic;
+    const arr = groups.get(key) || [];
+    arr.push(t);
+    groups.set(key, arr);
+  }
+  return groups;
 }
 
 export function deleteTask(id: string) {

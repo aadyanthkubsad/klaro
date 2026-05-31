@@ -13,8 +13,8 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Library, ClipboardCheck, RotateCcw, Download, Sparkles, Book,
   Mic, Play, Pause, Volume2, Lightbulb, Headphones,
-  RefreshCw, ChevronDown, ChevronUp, Loader2, AlertCircle,
-  GraduationCap, Zap, BookOpen, Drama,
+  RefreshCw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
+  Loader2, AlertCircle, GraduationCap, Zap, BookOpen, Drama,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AIGuide } from '../common/AIGuide';
@@ -26,7 +26,7 @@ import { UserStats, PlanType, PaywallConfig } from '../../types';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type VoiceStyle = 'clear-teacher' | 'friendly-tutor' | 'exam-coach' | 'story-mode';
+type VoiceStyle = 'clear-teacher' | 'friendly-tutor' | 'exam-coach' | 'story-mode' | 'clear-narrator';
 type AudioLanguage = 'en-IN' | 'hi-IN' | 'hinglish';
 
 interface ScriptSections {
@@ -55,10 +55,11 @@ interface AudioState {
 }
 
 const VOICE_OPTIONS: { value: VoiceStyle; label: string; icon: React.ReactNode; desc: string; proPlan?: boolean }[] = [
-  { value: 'clear-teacher', label: 'Clear Teacher', icon: <GraduationCap size={16} />, desc: 'Confident, structured explanations' },
+  { value: 'clear-teacher', label: 'Class Teacher', icon: <GraduationCap size={16} />, desc: 'Calm, structured classroom style' },
   { value: 'friendly-tutor', label: 'Friendly Tutor', icon: <Headphones size={16} />, desc: 'Warm, conversational tone' },
   { value: 'exam-coach', label: 'Exam Coach', icon: <Zap size={16} />, desc: 'Marks-focused strategies' },
-  { value: 'story-mode', label: 'Story Mode', icon: <Drama size={16} />, desc: 'Narrative storytelling', proPlan: true },
+  { value: 'story-mode', label: 'Story Mode', icon: <Drama size={16} />, desc: 'Engaging concept stories', proPlan: true },
+  { value: 'clear-narrator', label: 'Clear Narrator', icon: <Mic size={16} />, desc: 'Clean, simple summary' },
 ];
 
 const LANGUAGE_OPTIONS: { value: AudioLanguage; label: string }[] = [
@@ -127,11 +128,28 @@ export const AuralHub = ({
 
   // UI state
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
+  const [expandedScriptSection, setExpandedScriptSection] = useState<string | null>(null);
+  const [vocabIndex, setVocabIndex] = useState(0);
   const [quizAnswers, setQuizAnswers] = useState<Record<number, string>>({});
   const [showQuizResults, setShowQuizResults] = useState(false);
 
   // Remember learning mode
   useEffect(() => { setLastLearningMode('aural'); }, []);
+
+  // Clear stale audio when voice style or language changes
+  const prevStyleRef = useRef(voiceStyle);
+  const prevLangRef = useRef(language);
+  useEffect(() => {
+    if (prevStyleRef.current !== voiceStyle || prevLangRef.current !== language) {
+      setAudioState(null);
+      setIsPlaying(false);
+      setVocabIndex(0);
+      stopSpeaking();
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ''; }
+      prevStyleRef.current = voiceStyle;
+      prevLangRef.current = language;
+    }
+  }, [voiceStyle, language]);
 
   // ── Audio element setup ────────────────────────────────────────────────
   useEffect(() => {
@@ -648,43 +666,6 @@ export const AuralHub = ({
             );
           })()}
 
-          {/* ── Key Vocabulary (compact exam-focused) ─────────────── */}
-          {(() => {
-            const kv = audioState?.scriptSections?.keyVocabulary;
-            // Fallback to kit's keyVocabulary if available
-            const fallbackKv = Array.isArray(data.summary?.keyVocabulary) ? data.summary.keyVocabulary.map((v: any) => ({
-              term: typeof v === 'string' ? v : (v.term || v.word || ''),
-              meaning: typeof v === 'string' ? '' : (v.definition || v.meaning || ''),
-              examUse: '',
-            })) : null;
-            const vocab = (Array.isArray(kv) && kv.length > 0) ? kv : fallbackKv;
-            if (!vocab || vocab.length === 0) return null;
-            return (
-              <div className="bg-white border border-surface-container-high rounded-2xl p-6 card-shadow">
-                <div className="flex items-center gap-2 mb-4">
-                  <div className="p-1.5 bg-violet-50 rounded-lg text-violet-600">
-                    <BookOpen size={16} />
-                  </div>
-                  <h3 className="text-base font-black text-on-surface">Key Vocabulary</h3>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {vocab.map((v: any, i: number) => (
-                    <div key={i} className="border border-violet-100 rounded-xl p-4 bg-violet-50/50">
-                      <p className="text-sm font-black text-violet-800 mb-1">{v.term}</p>
-                      {v.meaning && <p className="text-xs text-on-surface font-medium leading-relaxed mb-1.5">{v.meaning}</p>}
-                      {v.examUse && (
-                        <p className="text-[10px] text-violet-600 font-bold flex items-start gap-1">
-                          <Zap size={10} className="shrink-0 mt-0.5" />
-                          {v.examUse}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })()}
-
           {/* ── View Full Script (collapsed by default) ───────────── */}
           {(audioState?.scriptSections || audioState?.script || auralData.audioScript) && (
             <div className="bg-white border border-surface-container-high rounded-2xl card-shadow overflow-hidden">
@@ -723,11 +704,11 @@ export const AuralHub = ({
                         const ss = audioState.scriptSections!;
                         const content = (ss as any)[section.key] || (section.altKey ? (ss as any)[section.altKey] : null);
                         if (!content || typeof content !== 'string') return null;
-                        const isOpen = expandedSection === section.key;
+                        const isOpen = expandedScriptSection === section.key;
                         return (
                           <div key={section.key} className={`border rounded-xl overflow-hidden border-${section.cls}-200`}>
                             <button
-                              onClick={(e) => { e.stopPropagation(); setExpandedSection(isOpen ? 'transcript' : section.key); }}
+                              onClick={(e) => { e.stopPropagation(); setExpandedScriptSection(isOpen ? null : section.key); }}
                               className={`w-full flex items-center justify-between p-3.5 text-left hover:bg-${section.cls}-50/50 transition-colors`}
                             >
                               <div className="flex items-center gap-2">
@@ -758,13 +739,13 @@ export const AuralHub = ({
                       {(audioState?.script || auralData.audioScript) && (
                         <div className="pt-3 border-t border-surface-container">
                           <button
-                            onClick={(e) => { e.stopPropagation(); setExpandedSection((expandedSection as string) === 'full' ? 'transcript' : 'full'); }}
+                            onClick={(e) => { e.stopPropagation(); setExpandedScriptSection(expandedScriptSection === 'full' ? null : 'full'); }}
                             className="text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors"
                           >
-                            {(expandedSection as string) === 'full' ? 'Hide Full Flowing Script' : 'Show Full Flowing Script'}
+                            {expandedScriptSection === 'full' ? 'Hide Full Flowing Script' : 'Show Full Flowing Script'}
                           </button>
                           <AnimatePresence>
-                            {(expandedSection as string) === 'full' && (
+                            {expandedScriptSection === 'full' && (
                               <motion.div
                                 initial={{ height: 0, opacity: 0 }}
                                 animate={{ height: 'auto', opacity: 1 }}
@@ -787,11 +768,83 @@ export const AuralHub = ({
           )}
         </div>
 
-        {/* ── Right column: AI Guide + Quick Actions ───────────────── */}
+        {/* ── Right column: Tips → Vocabulary Carousel → Quick Actions → Plan ── */}
         <div className="lg:col-span-4 space-y-6">
+          {/* 1. Tips & Suggestions (AIGuide) */}
           <AIGuide topic={topicTitle} customTips={data.readWrite?.tips} />
 
-          {/* Quick actions card */}
+          {/* 2. Key Vocabulary — carousel/slideshow */}
+          {(() => {
+            const kv = audioState?.scriptSections?.keyVocabulary;
+            const fallbackKv = Array.isArray(data.summary?.keyVocabulary) ? data.summary.keyVocabulary.map((v: any) => ({
+              term: typeof v === 'string' ? v : (v.term || v.word || ''),
+              meaning: typeof v === 'string' ? '' : (v.definition || v.meaning || ''),
+              examUse: '',
+            })) : null;
+            const vocab = (Array.isArray(kv) && kv.length > 0) ? kv : fallbackKv;
+            if (!vocab || vocab.length === 0) return null;
+            const safeIndex = Math.min(vocabIndex, vocab.length - 1);
+            const current = vocab[safeIndex];
+            return (
+              <div className="bg-white border border-surface-container-high rounded-2xl p-5 card-shadow">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 bg-violet-50 rounded-lg text-violet-600">
+                      <BookOpen size={16} />
+                    </div>
+                    <h3 className="text-sm font-black text-on-surface">Key Vocabulary</h3>
+                  </div>
+                  <span className="text-[10px] font-bold text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full">
+                    {safeIndex + 1} / {vocab.length}
+                  </span>
+                </div>
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={safeIndex}
+                    initial={{ opacity: 0, x: 30 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -30 }}
+                    transition={{ duration: 0.2 }}
+                    className="border border-violet-100 rounded-xl p-4 bg-violet-50/50 min-h-[100px]"
+                  >
+                    <p className="text-base font-black text-violet-800 mb-1.5">{current.term}</p>
+                    {current.meaning && <p className="text-xs text-on-surface font-medium leading-relaxed mb-2">{current.meaning}</p>}
+                    {current.examUse && (
+                      <p className="text-[10px] text-violet-600 font-bold flex items-start gap-1">
+                        <Zap size={10} className="shrink-0 mt-0.5" />
+                        {current.examUse}
+                      </p>
+                    )}
+                  </motion.div>
+                </AnimatePresence>
+                <div className="flex items-center justify-between mt-3">
+                  <button
+                    onClick={() => setVocabIndex(safeIndex <= 0 ? vocab.length - 1 : safeIndex - 1)}
+                    className="w-9 h-9 rounded-full border border-violet-200 bg-violet-50 text-violet-600 flex items-center justify-center hover:bg-violet-100 transition-colors"
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+                  <div className="flex gap-1.5">
+                    {vocab.map((_: any, i: number) => (
+                      <button
+                        key={i}
+                        onClick={() => setVocabIndex(i)}
+                        className={`w-2 h-2 rounded-full transition-all ${i === safeIndex ? 'bg-violet-500 scale-125' : 'bg-violet-200 hover:bg-violet-300'}`}
+                      />
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => setVocabIndex(safeIndex >= vocab.length - 1 ? 0 : safeIndex + 1)}
+                    className="w-9 h-9 rounded-full border border-violet-200 bg-violet-50 text-violet-600 flex items-center justify-center hover:bg-violet-100 transition-colors"
+                  >
+                    <ChevronRight size={18} />
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* 3. Quick Actions */}
           <div className="bg-white border border-surface-container-high rounded-2xl p-6 card-shadow space-y-4">
             <h4 className="text-xs font-bold text-on-surface-variant uppercase tracking-widest">Quick Actions</h4>
 
@@ -832,7 +885,7 @@ export const AuralHub = ({
             )}
           </div>
 
-          {/* Plan badge */}
+          {/* 4. Plan badge */}
           <div className={`p-4 rounded-xl border text-center ${
             isPro ? 'bg-amber-50 border-amber-200' : isPlus ? 'bg-indigo-50 border-indigo-200' : 'bg-surface-container-low border-surface-container-high'
           }`}>

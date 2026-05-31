@@ -1416,123 +1416,191 @@ Grading rules:
 
       // ── Step 1: Generate script via Gemini if not provided ──────────
       if (!script || typeof script !== 'string' || script.trim().length < 20) {
+
+        // Check Gemini script cache first (keyed by topic+language+voiceStyle)
+        const scriptCacheKey = buildCacheKey({
+          endpoint: 'audio-script',
+          topic,
+          subject: sub,
+          classLevel: lvl,
+          language: lang,
+          voiceStyle: style,
+        });
+        const cachedScript = cacheGet(scriptCacheKey);
+        if (cachedScript && typeof cachedScript === 'object' && cachedScript.fullScript) {
+          logger.info('Audio script cache HIT', { meta: { topic, style, lang } });
+          script = cachedScript.fullScript;
+          (req as any)._scriptSections = cachedScript;
+        } else {
+
         // Dynamic word targets based on CBSE chapter weightage
         const tgtMin = audioTarget.targetMinutes;
-        const tgtWords = audioTarget.targetWords;
+        const tgtWords = style === 'clear-narrator' ? Math.round(audioTarget.targetWords * 0.7) : audioTarget.targetWords;
         const marksNote = audioTarget.estimatedMarks;
         const depthNote = audioTarget.contentDepth;
         const numExamples = depthNote === 'very-heavy' ? '5-6' : depthNote === 'heavy' ? '4-5' : '3-4';
-        const langDirective = lang === 'hi-IN' ? ' in Hindi (Devanagari script)' : lang === 'hinglish' ? ' in Hinglish (Roman script, mix of Hindi and English like "Carbon ek special element hai kyunki yeh four bonds bana sakta hai")' : '';
+
+        const langLabel = lang === 'hi-IN' ? 'Hindi (Devanagari script)' : lang === 'hinglish' ? 'Hinglish (Roman script, natural mix of Hindi and English)' : 'English';
 
         // ── Common preamble shared by all styles ──────────────────────
-        const preamble = `You are explaining the chapter "${topic}" to a ${lvl} ${sub} student${langDirective}.
+        const preamble = `You are explaining the chapter "${topic}" to a ${lvl} ${sub} student in ${langLabel}.
 
 CHAPTER IMPORTANCE: ~${marksNote} marks in CBSE boards. Depth: "${depthNote}".
 
-MANDATORY LENGTH: fullScript MUST be ${tgtWords}+ words (≈${tgtMin} min at 130 wpm). Shorter than ${Math.round(tgtWords * 0.8)} words is REJECTED.
+MANDATORY LENGTH: fullScript MUST be ${tgtWords}+ words (≈${style === 'clear-narrator' ? Math.round(tgtMin * 0.7) : tgtMin} min at 130 wpm). Shorter than ${Math.round(tgtWords * 0.8)} words is REJECTED.
 
 NARRATION RULES (for TTS — text-to-speech engine reads this aloud):
 - SHORT sentences (max 15-20 words). One idea per sentence.
-- Use [pause] between major sections/definitions for natural breathing room.
+- Use [short pause] after each definition or key term.
+- Use [medium pause] before examples, before exam tips, and between subtopics.
+- Use [long pause] between major topic transitions and before dramatic reveals.
 - NEVER use "...", bullet points, asterisks, markdown, or numbered lists.
 - Write in flowing spoken paragraphs only.
 - Spell out formulas in words ("V equals I times R").
 - Read chemical equations naturally ("zinc reacts with HCl to form zinc chloride and hydrogen gas").
-- NEVER abbreviate without spelling out first.
-- ${lang === 'hinglish' ? 'Write in Roman Hinglish throughout. Mix Hindi and English naturally.' : lang === 'hi-IN' ? 'Write entirely in Hindi using simple Devanagari.' : 'Write in clear, simple English.'}`;
+- NEVER abbreviate without spelling out first.`;
 
         // ── Style-specific prompt body ────────────────────────────────
         const stylePrompts: Record<string, string> = {
 
           'clear-teacher': `${preamble}
 
-YOU ARE: A calm, confident CBSE classroom teacher who explains step-by-step, like the best school teacher a student has ever had.
+YOU ARE: A calm, confident CBSE classroom teacher who explains step-by-step, like the best school teacher a student has ever had. You speak slowly and repeat important keywords.
 
 VOICE: Calm. Structured. Slow. Patient. One concept at a time.
-PHRASES TO USE: "Let us understand this step by step.", "Now pay attention here.", "This is very important.", "Let me repeat that.", "Are you following so far?"
+PHRASES YOU MUST USE: "Let us understand this step by step.", "Now pay attention here.", "This is very important.", "Let me repeat that.", "Are you following so far?", "Let me say that again."
 DO NOT rush. DO NOT pile up concepts. Explain each idea fully before moving on.
+
+FORBIDDEN PHRASES (never use these — they belong to other styles):
+- "Imagine..." / "Picture this..." / "Our hero..." (these are Story Mode)
+- "Guaranteed marks" / "This carries X marks" (these are Exam Coach)
+- "Think of it like this" / "You're doing great!" (these are Friendly Tutor)
 
 SCRIPT STRUCTURE (follow this exact flow):
 1. HOOK: Short welcome + why this chapter matters. (40-60 words)
 2. MAIN EXPLANATION: Go through EVERY concept in the chapter one by one. For each concept:
-   - State the definition clearly. [pause]
-   - Explain what it means in simple words. [pause]
-   - Give an example. [pause]
-   - Mention common mistakes students make.
+   - State the definition clearly. [short pause]
+   - Explain what it means in simple words. [short pause]
+   - Give an example. [medium pause]
+   - Mention common mistakes students make. [short pause]
    Cover ALL definitions, formulas, reactions, properties, types, classifications. (${Math.round(tgtWords * 0.55)}+ words)
-3. WORKED EXAMPLES: Step-by-step solved examples and real-life connections. ${numExamples} examples minimum. (${Math.round(tgtWords * 0.15)}+ words)
+3. WORKED EXAMPLES: Step-by-step solved examples and real-life connections. ${numExamples} examples minimum. [medium pause] between examples. (${Math.round(tgtWords * 0.15)}+ words)
 4. COMMON MISTAKES: What students get wrong and how to fix it. (${Math.round(tgtWords * 0.05)}+ words)
-5. EXAM TIP: How this appears in boards, mark distribution, model answer structure, keywords examiners want. (${Math.round(tgtWords * 0.10)}+ words)
-6. RECAP: Quick summary of ALL key points covered. (${Math.round(tgtWords * 0.08)}+ words)
+5. EXAM TIP: [long pause] How this appears in boards, mark distribution, model answer structure, keywords examiners want. (${Math.round(tgtWords * 0.10)}+ words)
+6. RECAP: [long pause] Quick summary of ALL key points covered. (${Math.round(tgtWords * 0.08)}+ words)
 7. CHALLENGE: Encourage the student to test themselves. (30 words)`,
 
           'friendly-tutor': `${preamble}
 
-YOU ARE: A warm, friendly older sibling who makes tough concepts feel easy. You use everyday analogies and celebrate the student's progress.
+YOU ARE: A warm, friendly older sibling or private tutor who makes tough concepts feel easy. You use everyday analogies, celebrate progress, and keep the mood light and supportive.
 
-VOICE: Conversational. Warm. Encouraging. Simple. Relatable.
-PHRASES TO USE: "Think of it like this.", "See? That wasn't so hard!", "Let's figure this out together.", "You're doing great!", "Imagine you're...", "It's like when you..."
-Use "we" and "let's" throughout. Ask friendly questions. Use analogies from daily life (cooking, cricket, mobile phones, movies, social media).
+VOICE: Conversational. Warm. Encouraging. Simple. Relatable. Supportive.
+PHRASES YOU MUST USE: "Think of it like this.", "See? That wasn't so hard!", "Let's figure this out together.", "You're doing great!", "Suppose you're at home and...", "It's like when you...", "Pretty cool, right?", "Don't worry, we'll break this down."
+Use "we" and "let's" throughout. Ask friendly questions. Use analogies from daily life (cooking, cricket, mobile phones, movies, social media, WhatsApp, Instagram).
+
+FORBIDDEN PHRASES (never use these):
+- "Let us understand this step by step." / "Pay attention" (Class Teacher)
+- "Imagine..." / "Our hero..." / "Plot twist!" (Story Mode)
+- "This carries X marks" / "Guaranteed marks" (Exam Coach)
 
 SCRIPT STRUCTURE:
-1. HOOK: A friendly question or relatable scenario that connects to the student's life. (40-60 words)
+1. HOOK: A friendly question or relatable scenario that connects to the student's life. "Hey! Have you ever wondered why...?" (40-60 words)
 2. MAIN EXPLANATION: Explain every concept through analogies and everyday connections. For each concept:
-   - Start with a relatable analogy. [pause]
-   - Then give the textbook definition. [pause]
-   - Then explain why it matters. [pause]
-   - Celebrate: "See? Makes sense now, right?"
+   - Start with a relatable analogy. [short pause]
+   - Then give the textbook definition simply. [short pause]
+   - Then explain why it matters in real life. [medium pause]
+   - Celebrate: "See? Makes sense now, right?" [short pause]
    Cover ALL chapter content through this conversational approach. (${Math.round(tgtWords * 0.55)}+ words)
-3. REAL-LIFE CONNECTIONS: Show how these concepts appear in daily life. ${numExamples} examples with vivid analogies. (${Math.round(tgtWords * 0.15)}+ words)
-4. COMMON CONFUSIONS: Address what confuses most students, in a supportive way. (${Math.round(tgtWords * 0.05)}+ words)
-5. EXAM TIP: Exam advice given like a caring mentor, not a drill sergeant. (${Math.round(tgtWords * 0.10)}+ words)
-6. RECAP: Quick friendly summary. (${Math.round(tgtWords * 0.08)}+ words)
-7. CHALLENGE: Warm encouragement to practice. (30 words)`,
+3. REAL-LIFE CONNECTIONS: Show how these concepts appear in daily life. ${numExamples} examples with vivid analogies. [medium pause] between each. (${Math.round(tgtWords * 0.15)}+ words)
+4. COMMON CONFUSIONS: "A lot of students get confused here, but don't worry..." Address confusions supportively. (${Math.round(tgtWords * 0.05)}+ words)
+5. EXAM TIP: [long pause] Exam advice given like a caring mentor. "Here's a small tip for your exam..." (${Math.round(tgtWords * 0.10)}+ words)
+6. RECAP: Quick friendly summary. "So, to wrap up what we learned today..." (${Math.round(tgtWords * 0.08)}+ words)
+7. CHALLENGE: Warm encouragement. "You've got this! Try the quiz now and see how much you remember." (30 words)`,
 
           'exam-coach': `${preamble}
 
-YOU ARE: An intense, marks-focused exam coach from the best coaching institute. Every word you say is about scoring maximum marks.
+YOU ARE: An intense, marks-focused exam coach from the best coaching institute. Every single word you say is about scoring maximum marks. You think in terms of mark distribution, must-write keywords, and model answer formats.
 
-VOICE: Direct. Strategic. Precise. No fluff. Every sentence tied to marks.
-PHRASES TO USE: "This carries X marks.", "Guaranteed marks if you write this.", "Examiners always look for this keyword.", "Common mistake that loses marks.", "Here's how to write a perfect 5-mark answer.", "Write this line for full marks."
+VOICE: Direct. Strategic. Precise. Crisp. No fluff. Every sentence tied to marks.
+PHRASES YOU MUST USE: "This carries X marks.", "Guaranteed marks if you write this.", "Examiners always look for this keyword.", "Common mistake that loses marks.", "Here's how to write a perfect 5-mark answer.", "Write this line for full marks.", "If you remember nothing else, remember this.", "This is a must-write keyword."
 Structure EVERYTHING around marks and question types.
+
+FORBIDDEN PHRASES (never use these):
+- "Let us understand" / "Are you following?" (Class Teacher)
+- "Think of it like this" / "Pretty cool, right?" (Friendly Tutor)
+- "Imagine..." / "Picture this..." / "Our hero..." (Story Mode)
 
 SCRIPT STRUCTURE:
 1. HOOK: "This chapter carries ${marksNote} marks. Here's how to score FULL marks." (30-50 words)
-2. KEY DEFINITIONS (exam-ready): Every important definition stated in exam-answer format. After each: "If this comes as a 1-mark question, write exactly this." [pause] (${Math.round(tgtWords * 0.25)}+ words)
-3. IMPORTANT FORMULAS AND KEYWORDS: Every formula, reaction, theorem listed with exam context. "This formula appears in 3-mark numericals every year." (${Math.round(tgtWords * 0.15)}+ words)
-4. QUESTION-TYPE BREAKDOWN: How to answer 1-mark MCQs, 2-mark short answers, 3-mark questions, and 5-mark long answers from this chapter. Give model answer structures for each type. (${Math.round(tgtWords * 0.20)}+ words)
+2. KEY DEFINITIONS (exam-ready): Every important definition stated in exam-answer format. After each: "If this comes as a 1-mark question, write exactly this." [short pause] (${Math.round(tgtWords * 0.25)}+ words)
+3. MUST-WRITE KEYWORDS AND FORMULAS: [long pause] Every formula, reaction, theorem listed with exam context. "This formula appears in 3-mark numericals every year." List the exact keywords examiners look for. [short pause] after each keyword. (${Math.round(tgtWords * 0.15)}+ words)
+4. QUESTION-TYPE BREAKDOWN: [long pause] How to answer 1-mark MCQs, 2-mark short answers, 3-mark questions, and 5-mark long answers from this chapter. Give model answer structures for each type. [medium pause] between types. (${Math.round(tgtWords * 0.20)}+ words)
 5. COMMON MISTAKES THAT LOSE MARKS: "Students lose marks because they forget to...", "Never write X, always write Y." (${Math.round(tgtWords * 0.10)}+ words)
-6. RAPID REVISION CHECKLIST: Quick-fire list of everything to remember. "If you remember these ${depthNote === 'very-heavy' ? '15' : '10'} points, you will score full marks." (${Math.round(tgtWords * 0.10)}+ words)
+6. RAPID REVISION CHECKLIST: [long pause] Quick-fire list of everything to remember. "If you remember these ${depthNote === 'very-heavy' ? '15' : '10'} points, you will score full marks." (${Math.round(tgtWords * 0.10)}+ words)
 7. FINAL PUSH: Motivational exam-day advice. (30 words)`,
 
           'story-mode': `${preamble}
 
-YOU ARE: A master storyteller who transforms textbook chapters into vivid, unforgettable narratives. You teach through scenes, characters, and adventures — NOT through lectures.
+YOU ARE: A master storyteller and narrator. You transform textbook chapters into vivid, unforgettable stories. You teach science and concepts through scenes, characters, dialogue, emotions, and adventure. You are NOT a teacher. You are a storyteller.
 
-VOICE: Dramatic. Immersive. Imaginative. Fun. Still educational but NEVER like a classroom.
-PHRASES TO USE: "Imagine...", "Picture this...", "Our hero...", "But then something unexpected happened...", "And that's when the magic of science kicked in...", "Plot twist!"
-Every concept is explained through a story, not stated as a definition.
+VOICE: Dramatic. Expressive. Energetic. Curious. Imaginative. Like a movie narrator or adventure podcast host.
+PHRASES YOU MUST USE: "Imagine...", "Picture this...", "But then something unexpected happened...", "And that is when everything changed...", "Plot twist!", "Can you guess what happened next?", "Our character discovered something incredible..."
+Use vivid descriptions: colors, sounds, feelings, movement. Use dialogue between characters. Use dramatic reveals.
 
-THIS IS NOT A LECTURE. It is a story that teaches. The script must read like a short movie or adventure, NOT like a teacher talking.
+ABSOLUTELY FORBIDDEN PHRASES — using ANY of these will make the script INVALID:
+- "Let me explain" / "Let us understand" / "Now let us understand"
+- "Pay attention" / "This is very important" / "This is important for exams"
+- "In this chapter" / "Today we will learn" / "Let us study"
+- "The definition of X is..." / "X is defined as..."
+- "Remember this for your exam" / "This carries X marks"
+- "Are you following?" / "Let me repeat that"
+
+HOW TO TEACH THROUGH STORY (follow this pattern):
+- BAD: "Refraction is the bending of light when it passes from one medium to another."
+- GOOD: "As the beam of light hit the water surface, something strange happened. It bent. Changed direction. Almost like it stumbled as it crossed from air into water. [short pause] Scientists call this refraction."
+
+EXAMPLE OPENING (use this caliber, not this exact text):
+"Picture a world where atoms are tiny people living in a molecular city. Carbon is the most popular kid in town. Why? Because Carbon can hold hands with four friends at once. [short pause] That special ability? Scientists call it tetravalency. [medium pause] But here is where the story gets really interesting..."
 
 SCRIPT STRUCTURE:
-1. SCENE SETTING: Open with "Imagine..." or "Picture this..." Set a vivid scene that connects to the chapter. Introduce a character or situation. (60-80 words)
-2. THE STORY: Build a narrative arc where the character encounters each concept in the chapter as part of their adventure. For each concept:
-   - Show it happening in the story (not just state the definition).
-   - Use dialogue, action, and description.
-   - After showing the concept through story, briefly connect it to the textbook term: "And that, in science, is what we call [term]." [pause]
-   Cover ALL chapter content woven into the narrative. Use multiple scenes if needed. (${Math.round(tgtWords * 0.60)}+ words)
-3. THE TWIST: A surprising connection or revelation that ties all concepts together. (${Math.round(tgtWords * 0.10)}+ words)
-4. BACK TO THE TEXTBOOK: Brief section connecting the story back to exam terms. "So remember, when your textbook says [term], think of [story scene]." (${Math.round(tgtWords * 0.10)}+ words)
-5. RECAP: Quick story-style summary. "Our hero learned that..." (${Math.round(tgtWords * 0.08)}+ words)
-6. CHALLENGE: "Now it's your turn to be the hero. Test yourself!" (30 words)
+1. SCENE SETTING (this becomes "hook" in JSON): Open with "Imagine..." or "Picture this..." Set a vivid scene with a character, a place, or a situation. Make the listener curious. Do NOT open with any textbook language. (60-80 words)
+2. THE STORY ARC (this becomes "mainExplanation" in JSON): Build a narrative where your character encounters each concept as part of their journey. For each concept:
+   - Show it happening in the story through action and dialogue. [short pause]
+   - Use a dramatic reveal or surprise. [medium pause]
+   - THEN briefly connect to the textbook term: "And that, in science, is what we call [term]." [short pause]
+   Cover ALL chapter concepts woven into the narrative. Use multiple scenes. Use dialogue. (${Math.round(tgtWords * 0.60)}+ words)
+3. THE TWIST (this becomes "example" in JSON): [long pause] A surprising connection or revelation that ties all concepts together. "But here is the most amazing part..." (${Math.round(tgtWords * 0.10)}+ words)
+4. BACK TO THE TEXTBOOK (this becomes "examTip" in JSON): [long pause] Brief section connecting story scenes back to exam terms. "So remember, when your textbook says refraction, think of that beam of light stumbling into water." Give 3-5 exam keywords from the story. (${Math.round(tgtWords * 0.10)}+ words)
+5. STORY RECAP (this becomes "recap" in JSON): Quick story-style summary. "Our character learned that..." (${Math.round(tgtWords * 0.08)}+ words)
+6. CHALLENGE: "Now it is your turn to be the hero. Test yourself!" (30 words)`,
 
-CRITICAL: Story Mode must feel COMPLETELY DIFFERENT from Clear Teacher. No "let me explain" or "pay attention". Use "Imagine", "Picture this", "Our character", narrative descriptions.`,
+          'clear-narrator': `${preamble}
+
+YOU ARE: A neutral, professional narrator delivering a clean audio summary. No personality, no enthusiasm, no engagement phrases. Just clear, factual, well-paced information.
+
+VOICE: Neutral. Smooth. Clean. Simple. Like a professional audiobook narrator reading a textbook summary.
+PHRASES TO AVOID: Do NOT use "Let us understand", "Imagine", "Pay attention", "You're doing great", "This carries X marks", or any engagement phrases. Simply state facts clearly.
+
+SCRIPT STRUCTURE:
+1. HOOK: One sentence stating what this chapter covers. (20-30 words)
+2. MAIN EXPLANATION: Cover all key concepts in simple, clear language. One concept per paragraph. State definition, then brief explanation, then move on. No analogies, no stories, no exam coaching. [short pause] after each concept. (${Math.round(tgtWords * 0.60)}+ words)
+3. KEY EXAMPLES: Brief factual examples for important concepts. [medium pause] between examples. (${Math.round(tgtWords * 0.15)}+ words)
+4. SUMMARY NOTES: Important formulas, reactions, or classifications listed clearly. (${Math.round(tgtWords * 0.10)}+ words)
+5. RECAP: [long pause] Concise summary of all key points. (${Math.round(tgtWords * 0.08)}+ words)
+6. CHALLENGE: "Review what you have learned. Take the quiz." (15 words)`,
         };
 
         const stylePrompt = stylePrompts[style] || stylePrompts['clear-teacher'];
 
+        // ── Language enforcement block ──────────────────────────────────
+        const langEnforcement = lang === 'hi-IN'
+          ? `\n\nABSOLUTE LANGUAGE REQUIREMENT (CRITICAL — violating this makes the response INVALID):\nThe fullScript and EVERY section (hook, mainExplanation, example, examTip, recap, challenge) MUST be written entirely in Hindi using Devanagari script.\nScientific terms and formulas may remain in English, but ALL explanations, sentences, and connecting words MUST be in Hindi.\nDo NOT write in English. Do NOT fall back to English.\nExample: "कार्बन एक विशेष तत्व है क्योंकि यह चार बंध बना सकता है। इस गुण को tetravalency कहते हैं।"`
+          : lang === 'hinglish'
+          ? `\n\nABSOLUTE LANGUAGE REQUIREMENT (CRITICAL — violating this makes the response INVALID):\nThe fullScript and EVERY section MUST be written in Hinglish using Roman script.\nHinglish means naturally mixing Hindi and English the way Indian students actually speak.\nScientific terms and formulas stay in English. Everything else mixes Hindi and English naturally.\nDo NOT write purely in English. Do NOT write in Devanagari.\nExample: "Carbon ek special element hai kyunki yeh four bonds bana sakta hai. Is property ko tetravalency kehte hain. Aur jab carbon atoms ek doosre se bond banate hain, toh long chains form hoti hain. Isse catenation kehte hain."`
+          : '';
+
         const scriptPrompt = `${stylePrompt}
+${langEnforcement}
 
 Output a JSON object with this EXACT structure:
 {
@@ -1542,7 +1610,7 @@ Output a JSON object with this EXACT structure:
   "examTip": "Exam strategy, tips, or textbook connections",
   "recap": "Quick summary of everything covered",
   "challenge": "Motivational closing line (30 words)",
-  "fullScript": "The COMPLETE narration combining ALL sections above into one continuous, flowing script with [pause] markers between sections. MUST be ${tgtWords}+ words.",
+  "fullScript": "The COMPLETE narration combining ALL sections above into one continuous, flowing script with [short pause], [medium pause], and [long pause] markers. MUST be ${tgtWords}+ words.",
   "quickRecap": ["Key point 1 (under 18 words)", "Key point 2", "Key point 3", "Key point 4", "Key point 5", "Key point 6", "Key point 7"],
   "keyVocabulary": [
     {"term": "Term name", "meaning": "Simple one-line meaning", "examUse": "How to use this term in exam answers"},
@@ -1579,8 +1647,12 @@ Respond ONLY with valid JSON. No markdown, no code fences.`;
           .replace(/\n{3,}/g, '\n\n')
           .trim();
 
+        // Cache the Gemini-generated script for this (topic, language, voiceStyle) combo
+        cacheSet(scriptCacheKey, parsed);
+
         // Return script sections + new quickRecap/keyVocabulary alongside the audio
         (req as any)._scriptSections = parsed;
+        } // end cache else
       }
 
       // ── Step 2: Validate the final payload ─────────────────────────

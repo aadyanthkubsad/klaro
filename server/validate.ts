@@ -183,7 +183,7 @@ export function validateGenerateAudio(body: any): ValidationError[] {
   if (language && !validLangs.includes(language)) {
     errors.push({ field: 'language', message: `Unsupported language. Use one of: ${validLangs.join(', ')}` });
   }
-  const validStyles = ['clear-teacher', 'friendly-tutor', 'exam-coach', 'story-mode'];
+  const validStyles = ['clear-teacher', 'friendly-tutor', 'exam-coach', 'story-mode', 'clear-narrator'];
   if (voiceStyle && !validStyles.includes(voiceStyle)) {
     errors.push({ field: 'voiceStyle', message: `Unsupported voice style. Use one of: ${validStyles.join(', ')}` });
   }
