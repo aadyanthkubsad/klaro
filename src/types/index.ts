@@ -381,6 +381,8 @@ export type PaperSubject =
   | 'Hindi A'
   | 'Hindi B';
 
+export type PaperLinkStatus = 'verified' | 'needs-review' | 'missing';
+
 export interface PaperSource {
   id: string;
   subject: PaperSubject;
@@ -389,16 +391,12 @@ export interface PaperSource {
   board: 'CBSE';
   type: PaperType;
   sourceName: 'CBSE';
-  /** Direct URL to the PDF (may 404 if CBSE moves it). */
-  sourceUrl: string;
-  /** Direct URL to the matching marking scheme PDF. */
+  directPdfUrl?: string;
   markingSchemeUrl?: string;
-  /** Official CBSE index page listing papers for this year/class. Always works. */
   officialIndexUrl: string;
-  /** True if sourceUrl has been manually verified against the CBSE site. */
   verified: boolean;
-  /** ISO date when sourceUrl was last checked. */
+  pdfStatus: PaperLinkStatus;
+  markingSchemeStatus: PaperLinkStatus;
   lastChecked: string;
-  /** Short label shown on the card, e.g. "Set 1" or "Term 2". */
   setLabel?: string;
 }

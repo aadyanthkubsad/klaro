@@ -121,15 +121,26 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
     onSavePaperToLibrary?.(paper);
   }, [onSavePaperToLibrary]);
 
-  // ── Fallback modal (only when no direct URL exists) ──────────────────────
+  // ── Fallback modal (shown when direct PDF is unverified or missing) ──────
   const [fallbackPaper, setFallbackPaper] = useState<PaperSource | null>(null);
+  const [fallbackContext, setFallbackContext] = useState<'pdf' | 'marking-scheme'>('pdf');
 
-  const openPaperLink = useCallback((paper: PaperSource, url: string) => {
-    if (!url) {
-      setFallbackPaper(paper);
-      return;
+  const openPaperLink = useCallback((paper: PaperSource, linkType: 'pdf' | 'marking-scheme') => {
+    if (linkType === 'pdf') {
+      if (paper.directPdfUrl && paper.pdfStatus === 'verified') {
+        window.open(paper.directPdfUrl, '_blank', 'noopener,noreferrer');
+      } else {
+        setFallbackContext('pdf');
+        setFallbackPaper(paper);
+      }
+    } else {
+      if (paper.markingSchemeUrl && paper.markingSchemeStatus === 'verified') {
+        window.open(paper.markingSchemeUrl, '_blank', 'noopener,noreferrer');
+      } else {
+        setFallbackContext('marking-scheme');
+        setFallbackPaper(paper);
+      }
     }
-    window.open(url, '_blank', 'noopener,noreferrer');
   }, []);
 
   useEffect(() => {
@@ -872,7 +883,9 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
                   const typeColor = paper.type === 'previous-year' ? 'bg-blue-100 text-blue-700'
                     : paper.type === 'sample-paper' ? 'bg-violet-100 text-violet-700'
                     : 'bg-emerald-100 text-emerald-700';
-                  const isPdfLink = paper.sourceUrl.endsWith('.pdf');
+                  const hasPdf = !!paper.directPdfUrl;
+                  const pdfVerified = paper.pdfStatus === 'verified';
+                  const msVerified = paper.markingSchemeStatus === 'verified';
                   return (
                     <div
                       key={paper.id}
@@ -882,19 +895,37 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
                         <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${typeColor}`}>
                           {paper.type.replace('-', ' ')}
                         </span>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          {paper.verified ? (
+                        <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
+                          {pdfVerified && msVerified ? (
                             <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[8px] font-black uppercase tracking-widest">
                               <CheckCircle size={8} /> Verified
                             </span>
-                          ) : isPdfLink ? (
-                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[8px] font-black uppercase tracking-widest">
-                              <AlertCircle size={8} /> Link needs review
-                            </span>
                           ) : (
-                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 text-[8px] font-black uppercase tracking-widest">
-                              <ExternalLink size={8} /> Opens official page
-                            </span>
+                            <>
+                              {pdfVerified ? (
+                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[8px] font-black uppercase tracking-widest">
+                                  <CheckCircle size={8} /> PDF
+                                </span>
+                              ) : hasPdf ? (
+                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[8px] font-black uppercase tracking-widest">
+                                  <AlertCircle size={8} /> PDF needs review
+                                </span>
+                              ) : null}
+                              {msVerified ? (
+                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[8px] font-black uppercase tracking-widest">
+                                  <CheckCircle size={8} /> MS
+                                </span>
+                              ) : paper.markingSchemeUrl && !msVerified ? (
+                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[8px] font-black uppercase tracking-widest">
+                                  <AlertCircle size={8} /> MS needs review
+                                </span>
+                              ) : null}
+                              {!hasPdf && !paper.markingSchemeUrl && (
+                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 text-[8px] font-black uppercase tracking-widest">
+                                  <ExternalLink size={8} /> Official page
+                                </span>
+                              )}
+                            </>
                           )}
                         </div>
                       </div>
@@ -913,14 +944,14 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
                         {/* Row 1: Open Paper + Marking Scheme */}
                         <div className="grid grid-cols-2 gap-2">
                           <button
-                            onClick={() => openPaperLink(paper, paper.sourceUrl)}
+                            onClick={() => hasPdf ? openPaperLink(paper, 'pdf') : window.open(paper.officialIndexUrl, '_blank', 'noopener,noreferrer')}
                             className="flex items-center justify-center gap-1.5 py-2.5 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:brightness-110 transition-all"
                           >
-                            <ExternalLink size={11} /> {isPdfLink ? 'Open Sample Paper' : 'Open Official Page'}
+                            <ExternalLink size={11} /> {hasPdf ? 'Open Paper' : 'Official Page'}
                           </button>
                           {paper.markingSchemeUrl ? (
                             <button
-                              onClick={() => openPaperLink(paper, paper.markingSchemeUrl!)}
+                              onClick={() => openPaperLink(paper, 'marking-scheme')}
                               className="flex items-center justify-center gap-1.5 py-2.5 bg-emerald-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:brightness-110 transition-all"
                             >
                               <ClipboardList size={11} /> Marking Scheme
@@ -931,7 +962,7 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
                             </button>
                           )}
                         </div>
-                        {/* Row 2: Practice Test + Official CBSE Page (fallback) */}
+                        {/* Row 2: Practice Test + Save */}
                         <div className="grid grid-cols-2 gap-2">
                           <button
                             onClick={() => onGeneratePracticeFromPattern?.(paper)}
@@ -950,8 +981,8 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
                             <Bookmark size={11} className={isSaved ? 'fill-amber-500' : ''} /> {isSaved ? 'Saved' : 'Save'}
                           </button>
                         </div>
-                        {/* Row 3: Official CBSE Page link (secondary/fallback) */}
-                        {isPdfLink && (
+                        {/* Row 3: Official CBSE Page link (always show for papers with direct PDFs) */}
+                        {hasPdf && (
                           <a
                             href={paper.officialIndexUrl}
                             target="_blank"
@@ -1242,10 +1273,12 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
               </div>
 
               <h3 className="text-xl font-black text-on-surface mb-1">
-                Could not open the direct PDF
+                {fallbackContext === 'pdf' ? 'PDF link needs review' : 'Marking scheme link needs review'}
               </h3>
               <p className="text-sm text-on-surface-variant font-medium leading-relaxed mb-2">
-                We could not open the direct PDF. You can open the official CBSE page where the paper is listed.
+                {fallbackContext === 'pdf'
+                  ? 'The direct PDF link needs review. Open the official CBSE page where the paper is listed.'
+                  : 'The direct marking scheme link needs review. Open the official CBSE page where the marking scheme is listed.'}
               </p>
               <p className="text-xs text-on-surface-variant/70 font-medium mb-6">
                 {fallbackPaper.subject} · {fallbackPaper.year} · {fallbackPaper.type.replace('-', ' ')}
@@ -1260,6 +1293,15 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
                 >
                   Open Official CBSE Page
                 </a>
+                <button
+                  onClick={() => {
+                    console.warn(`[Klaro] Broken link reported: ${fallbackContext} — ${fallbackPaper.subject} ${fallbackPaper.year} (${fallbackPaper.type})`);
+                    setFallbackPaper(null);
+                  }}
+                  className="w-full py-3 text-amber-700 font-bold text-sm hover:bg-amber-50 rounded-2xl transition-all"
+                >
+                  Report Broken Link
+                </button>
                 <button
                   onClick={() => setFallbackPaper(null)}
                   className="w-full py-3 text-on-surface-variant font-bold text-sm hover:bg-surface-container-low rounded-2xl transition-all"

@@ -42,43 +42,56 @@ interface AnalyticsViewProps {
   onSave?: (item: Partial<LibraryItem>, kitData?: any) => void;
   setView?: (view: string) => void;
   kit?: any;
+  currentTopic?: string;
 }
 
-export const AnalyticsView = ({ library, activeTab: externalActiveTab, setActiveTab: setExternalActiveTab, stats, onSave, setView, kit }: AnalyticsViewProps) => {
+export const AnalyticsView = ({ library, activeTab: externalActiveTab, setActiveTab: setExternalActiveTab, stats, onSave, setView, kit, currentTopic }: AnalyticsViewProps) => {
   const [internalActiveTab, setInternalActiveTab] = useState<'test_analysis' | 'weak_topics' | 'score_analysis'>('test_analysis');
   
   const activeTab = externalActiveTab || internalActiveTab;
   const setActiveTab = setExternalActiveTab || setInternalActiveTab;
 
   const [quizHistory, setQuizHistory] = useState(() => getQuizHistory());
-  const latestAttempt = quizHistory[0] || null;
+  const latestAttempt = (() => {
+    if (!currentTopic) return quizHistory[0] || null;
+    const topicMatch = quizHistory.find(q => q.topic === currentTopic || q.chapterTitle === currentTopic);
+    return topicMatch || quizHistory[0] || null;
+  })();
 
-  const [weakTopicsData, setWeakTopicsData] = useState<{ notes: string, tips: string, keywords: string[], quiz: QuizData } | null>(kit || null);
+  const [weakTopicsData, setWeakTopicsData] = useState<{ notes: string, tips: string, keywords: string[], quiz: QuizData } | null>(null);
+  const [weakTopicsForTopic, setWeakTopicsForTopic] = useState<string | undefined>(undefined);
   const [isGenerating, setIsGenerating] = useState(false);
   const [savedAnalysisId, setSavedAnalysisId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (kit) {
+    if (kit && !currentTopic) {
       setWeakTopicsData(kit);
     }
-  }, [kit]);
+  }, [kit, currentTopic]);
+
+  useEffect(() => {
+    if (weakTopicsForTopic !== currentTopic) {
+      setWeakTopicsData(null);
+      setWeakTopicsForTopic(currentTopic);
+    }
+  }, [currentTopic, weakTopicsForTopic]);
 
   const generateWeakTopicsData = async () => {
-    if (!stats || stats.weakTopics.length === 0) return;
+    if (!stats) return;
     try {
       setIsGenerating(true);
-      // Scope to most recent chapter — don't mix chapters
-      const recentTopic = latestAttempt?.topic || null;
-      const scopedMistakes = recentTopic
-        ? stats.mistakes.filter(m => m.topic === recentTopic)
+      const scopeTopic = currentTopic || latestAttempt?.topic || null;
+      const scopedMistakes = scopeTopic
+        ? stats.mistakes.filter(m => m.topic === scopeTopic)
         : stats.mistakes;
-      const scopedWeakTopics = recentTopic
-        ? stats.weakTopics.filter(t => scopedMistakes.some(m => m.topic === t || m.topic === recentTopic))
+      const scopedWeakTopics = scopeTopic
+        ? stats.weakTopics.filter(t => scopedMistakes.some(m => m.topic === t || m.topic === scopeTopic))
         : stats.weakTopics;
-      const topicsToSend = scopedWeakTopics.length > 0 ? scopedWeakTopics : (recentTopic ? [recentTopic] : stats.weakTopics);
-      const mistakesToSend = scopedMistakes.length > 0 ? scopedMistakes : stats.mistakes.slice(0, 10);
+      const topicsToSend = scopedWeakTopics.length > 0 ? scopedWeakTopics : (scopeTopic ? [scopeTopic] : stats.weakTopics);
+      const mistakesToSend = scopedMistakes.length > 0 ? scopedMistakes : [];
       const data = await aiService.generateWeakTopicAnalysis(topicsToSend, mistakesToSend);
       setWeakTopicsData(data);
+      setWeakTopicsForTopic(currentTopic);
       setSavedAnalysisId(null);
     } catch (e) {
       console.error(e);
@@ -89,7 +102,7 @@ export const AnalyticsView = ({ library, activeTab: externalActiveTab, setActive
   };
 
   useEffect(() => {
-    if (activeTab === 'weak_topics' && !weakTopicsData && stats && stats.weakTopics.length > 0) {
+    if (activeTab === 'weak_topics' && !weakTopicsData && stats && (stats.weakTopics.length > 0 || currentTopic)) {
       generateWeakTopicsData();
     }
   }, [activeTab, stats, weakTopicsData]);
@@ -578,15 +591,17 @@ export const AnalyticsView = ({ library, activeTab: externalActiveTab, setActive
             animate={{ opacity: 1 }}
             className="space-y-10 pb-20"
           >
-            {/* Header — uses quiz attempt chapter, never library[0] */}
+            {/* Header — scoped to currentTopic when available */}
             <div className="flex flex-col lg:flex-row justify-between items-start gap-6">
               <div className="space-y-4">
                 <div className="flex items-center gap-2 text-primary font-black text-[10px] uppercase tracking-widest">
                   <BookOpen size={14} /> {latestAttempt.subject || 'Science'} · {new Date(latestAttempt.date).toLocaleDateString()}
                 </div>
-                <h2 className="text-4xl font-black text-on-surface tracking-tight">{latestAttempt.chapterTitle || latestAttempt.topic}</h2>
+                <h2 className="text-4xl font-black text-on-surface tracking-tight">{currentTopic || latestAttempt.chapterTitle || latestAttempt.topic}</h2>
                 <p className="text-on-surface-variant font-medium max-w-2xl leading-relaxed">
-                  Knowledge map based on your quiz attempts for this chapter.
+                  {quizHistory.some(q => q.topic === (currentTopic || latestAttempt.topic))
+                    ? 'Knowledge map based on your quiz attempts for this chapter.'
+                    : `No quiz data yet for "${currentTopic}". Take a quiz on this chapter to see its analytics.`}
                 </p>
               </div>
             </div>
@@ -712,7 +727,7 @@ export const AnalyticsView = ({ library, activeTab: externalActiveTab, setActive
             })()}
           </motion.div>
         ) : (
-          <motion.div 
+          <motion.div
             key="empty_analysis"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
