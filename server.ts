@@ -15,7 +15,10 @@ import { getChapterAudioTarget, describeTarget } from './server/data/chapterWeig
 import { checkRateLimit, cleanupStaleEntries, getUsageStats, type EndpointBucket, type PlanType } from './server/rateLimiter.js';
 import { enqueueAIRequest, configureQueue, getQueueStats } from './server/queue.js';
 import { cacheGet, cacheSet, buildCacheKey, configureCache, getCacheStats, cleanupExpiredCache, cacheInvalidate } from './server/cache.js';
-import { initDatabase, flushDatabase, getStats, updateStats, getLibrary, addToLibrary, removeFromLibrary, cleanupLibrary, getKit, saveKit, getOrCreateUser, getUserPlan, incrementUserKitCount, getDatabaseStats, getAllKits } from './server/database.js';
+import { initDatabase, flushDatabase, getStats, updateStats, getLibrary, addToLibrary, removeFromLibrary, cleanupLibrary, getKit, saveKit, getOrCreateUser, getUserPlan, incrementUserKitCount, getDatabaseStats, getAllKits, createUser, getUserByEmail, getUserById, updateUserPlan, createPaymentRecord, markPaymentPaid, getPaymentByOrderId } from './server/database.js';
+import { authMiddleware, requireAuth, hashPassword, verifyPassword, generateToken } from './server/auth.js';
+import { createOrder, verifyPaymentSignature, isRazorpayConfigured, PLAN_PRICES } from './server/payments.js';
+import { verifyChapter, verifyAllChapters, getVerifiedSubjects } from './server/syllabusVerifier.js';
 
 const __filename = fileURLToPath(import.meta.url);
 // Initialize path helpers
@@ -138,6 +141,139 @@ async function startServer() {
     });
 
     next();
+  });
+
+  // ── Auth middleware (sets req.userId — allows anonymous fallback) ─────────
+  app.use(authMiddleware);
+
+  // ── Auth endpoints ──────────────────────────────────────────────────────────
+
+  app.post('/api/auth/register', async (req, res) => {
+    try {
+      const { email, password, displayName } = req.body;
+      if (!email || !password) {
+        return res.status(400).json({ success: false, error: 'Email and password are required' });
+      }
+      if (password.length < 8) {
+        return res.status(400).json({ success: false, error: 'Password must be at least 8 characters' });
+      }
+      const existing = getUserByEmail(email);
+      if (existing) {
+        return res.status(409).json({ success: false, error: 'An account with this email already exists' });
+      }
+      const hash = await hashPassword(password);
+      const user = createUser(email, hash, displayName || 'Learner');
+      const token = generateToken({ userId: user.id, email: user.email });
+      res.json({ success: true, token, user: { id: user.id, email: user.email, displayName: user.display_name, planType: user.plan_type } });
+    } catch (err: any) {
+      logger.error('Registration failed', { meta: { error: err.message } });
+      res.status(500).json({ success: false, error: 'Registration failed' });
+    }
+  });
+
+  app.post('/api/auth/login', async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      if (!email || !password) {
+        return res.status(400).json({ success: false, error: 'Email and password are required' });
+      }
+      const user = getUserByEmail(email);
+      if (!user || !user.password_hash) {
+        return res.status(401).json({ success: false, error: 'Invalid email or password' });
+      }
+      const valid = await verifyPassword(password, user.password_hash);
+      if (!valid) {
+        return res.status(401).json({ success: false, error: 'Invalid email or password' });
+      }
+      const token = generateToken({ userId: user.id, email: user.email });
+      res.json({ success: true, token, user: { id: user.id, email: user.email, displayName: user.display_name, planType: user.plan_type } });
+    } catch (err: any) {
+      logger.error('Login failed', { meta: { error: err.message } });
+      res.status(500).json({ success: false, error: 'Login failed' });
+    }
+  });
+
+  app.get('/api/auth/me', requireAuth, (req: any, res) => {
+    const user = getUserById(req.userId);
+    if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+    res.json({ success: true, user: { id: user.id, email: user.email, displayName: user.display_name, planType: user.plan_type } });
+  });
+
+  // ── Payment endpoints ────────────────────────────────────────────────────
+
+  app.post('/api/payments/create-order', requireAuth, async (req: any, res) => {
+    if (!isRazorpayConfigured()) {
+      return res.status(503).json({ success: false, error: 'Payment system not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to .env' });
+    }
+    try {
+      const { planKey } = req.body;
+      if (!PLAN_PRICES[planKey]) {
+        return res.status(400).json({ success: false, error: 'Invalid plan' });
+      }
+      const order = await createOrder(planKey, req.userId);
+      const [planType, billingCycle] = planKey.split('-');
+      createPaymentRecord(req.userId, order.id, order.amount, order.currency, planType, billingCycle);
+      res.json({
+        success: true,
+        order: { id: order.id, amount: order.amount, currency: order.currency },
+        key: process.env.RAZORPAY_KEY_ID,
+      });
+    } catch (err: any) {
+      logger.error('Payment order creation failed', { meta: { error: err.message } });
+      res.status(500).json({ success: false, error: 'Could not create payment order' });
+    }
+  });
+
+  app.post('/api/payments/verify', requireAuth, async (req: any, res) => {
+    try {
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.status(400).json({ success: false, error: 'Missing payment details' });
+      }
+      const isValid = verifyPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+      if (!isValid) {
+        return res.status(400).json({ success: false, error: 'Payment verification failed — invalid signature' });
+      }
+      markPaymentPaid(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+      const payment = getPaymentByOrderId(razorpay_order_id);
+      if (payment) {
+        const expiresAt = payment.billing_cycle === 'yearly'
+          ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
+          : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+        updateUserPlan(req.userId, payment.plan_type, expiresAt);
+      }
+      const user = getUserById(req.userId);
+      res.json({ success: true, user: { id: user.id, planType: user.plan_type } });
+    } catch (err: any) {
+      logger.error('Payment verification failed', { meta: { error: err.message } });
+      res.status(500).json({ success: false, error: 'Payment verification failed' });
+    }
+  });
+
+  // ── Syllabus verification endpoint ───────────────────────────────────────
+
+  app.post('/api/verify-syllabus', (req: any, res) => {
+    const { chapters, classLevel } = req.body;
+    if (!chapters || !Array.isArray(chapters)) {
+      return res.status(400).json({ success: false, error: 'chapters array required (each with title and subject)' });
+    }
+    const results = verifyAllChapters(chapters, classLevel || 'Class 10');
+    const verified = results.filter(r => r.found).length;
+    res.json({
+      success: true,
+      summary: { total: results.length, verified, unverified: results.length - verified },
+      subjects: getVerifiedSubjects(),
+      results,
+    });
+  });
+
+  app.get('/api/verify-chapter', (req: any, res) => {
+    const { chapter, subject, classLevel } = req.query;
+    if (!chapter || !subject) {
+      return res.status(400).json({ success: false, error: 'chapter and subject query params required' });
+    }
+    const result = verifyChapter(chapter as string, subject as string, (classLevel as string) || 'Class 10');
+    res.json({ success: true, result });
   });
 
   // ── Helper: rate limit middleware factory ──────────────────────────────────
