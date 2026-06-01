@@ -400,3 +400,14 @@ export interface PaperSource {
   lastChecked: string;
   setLabel?: string;
 }
+
+// ─── Razorpay Checkout ──────────────────────────────────────────────────────
+
+declare global {
+  interface Window {
+    Razorpay: new (options: Record<string, any>) => {
+      open: () => void;
+      on: (event: string, handler: (response: any) => void) => void;
+    };
+  }
+}

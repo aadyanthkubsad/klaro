@@ -6,8 +6,8 @@
  *
  * Three-card pricing layout: Free / Plus / Exam Pro.
  * Monthly / Yearly toggle. Usage counters below the cards.
- * No real payment gateway — clicking a paid CTA flips planType
- * via changePlan() so features can be previewed.
+ * Paid CTAs create a Razorpay order server-side and open the
+ * checkout modal. On success the plan is verified and updated.
  *
  * Pricing:
  *   Free     — ₹0
@@ -24,6 +24,7 @@ import {
 import { motion } from 'motion/react';
 import { PlanType } from '../../types';
 import { PRICING, getUsageCounters, getLimitsFor } from '../../services/billingService';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface OffersViewProps {
   setView?: (v: string) => void;
@@ -69,7 +70,9 @@ function yearlySavingsPercent(monthly: number, yearly: number): number {
 }
 
 export const OffersView = ({ setView, planType, changePlan }: OffersViewProps) => {
+  const { user, authFetch, refreshUser } = useAuth();
   const [cycle, setCycle] = useState<'monthly' | 'yearly'>('yearly');
+  const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
   const counters = getUsageCounters();
   const limits = getLimitsFor(planType);
 
@@ -78,7 +81,7 @@ export const OffersView = ({ setView, planType, changePlan }: OffersViewProps) =
       .map(p => yearlySavingsPercent(p.monthlyPrice, p.yearlyPrice)),
   );
 
-  const handleCta = (id: PlanType) => {
+  const handleCta = async (id: PlanType) => {
     if (id === planType) {
       setView?.('dashboard');
       return;
@@ -88,9 +91,71 @@ export const OffersView = ({ setView, planType, changePlan }: OffersViewProps) =
       setView?.('dashboard');
       return;
     }
-    // No real billing yet — flip the plan flag for demo/testing
-    changePlan(id);
-    setView?.('dashboard');
+
+    // Paid plan — require login
+    if (!user) {
+      setView?.('auth');
+      return;
+    }
+
+    // Build the plan key the backend expects, e.g. "plus-monthly"
+    const planKey = `${id}-${cycle}`;
+    setCheckoutLoading(id);
+
+    try {
+      const res = await authFetch('/api/payments/create-order', {
+        method: 'POST',
+        body: JSON.stringify({ planKey }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        alert(data.error || 'Could not create order. Please try again.');
+        setCheckoutLoading(null);
+        return;
+      }
+
+      const options = {
+        key: data.key,
+        amount: data.order.amount,
+        currency: data.order.currency,
+        name: 'Klaro Learn',
+        description: PRICING.find(p => p.id === id)?.name || 'Plan Upgrade',
+        order_id: data.order.id,
+        handler: async (response: any) => {
+          try {
+            const verifyRes = await authFetch('/api/payments/verify', {
+              method: 'POST',
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+              }),
+            });
+            const verifyData = await verifyRes.json();
+            if (verifyData.success) {
+              changePlan(verifyData.user.planType);
+              await refreshUser();
+              setView?.('dashboard');
+            } else {
+              alert('Payment verification failed. Contact support if amount was deducted.');
+            }
+          } catch {
+            alert('Payment verification failed. Contact support if amount was deducted.');
+          }
+          setCheckoutLoading(null);
+        },
+        modal: { ondismiss: () => setCheckoutLoading(null) },
+        prefill: { email: user?.email || '', name: user?.displayName || '' },
+        theme: { color: '#6366f1' },
+      };
+
+      const rzp = new window.Razorpay(options);
+      rzp.open();
+    } catch {
+      alert('Network error. Please check your connection and try again.');
+      setCheckoutLoading(null);
+    }
   };
 
   return (
@@ -218,9 +283,9 @@ export const OffersView = ({ setView, planType, changePlan }: OffersViewProps) =
 
               <button
                 onClick={() => handleCta(p.id)}
-                disabled={isCurrent}
+                disabled={isCurrent || checkoutLoading === p.id}
                 className={`w-full py-3 rounded-2xl text-sm font-black uppercase tracking-widest transition-all ${
-                  isCurrent
+                  isCurrent || checkoutLoading === p.id
                     ? 'bg-surface-container text-on-surface-variant cursor-not-allowed'
                     : p.highlight
                     ? 'bg-primary text-white hover:brightness-110 shadow-lg'
@@ -229,7 +294,11 @@ export const OffersView = ({ setView, planType, changePlan }: OffersViewProps) =
                     : 'bg-navy-dark text-white hover:bg-primary'
                 }`}
               >
-                {isCurrent ? 'Current plan' : p.id === 'free' ? 'Start Free' : `Upgrade to ${p.name}`}
+                {checkoutLoading === p.id ? (
+                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin mx-auto" />
+                ) : (
+                  isCurrent ? 'Current plan' : p.id === 'free' ? 'Start Free' : `Upgrade to ${p.name}`
+                )}
               </button>
             </div>
           );
@@ -288,11 +357,10 @@ export const OffersView = ({ setView, planType, changePlan }: OffersViewProps) =
       <div className="bg-surface-container-low rounded-[24px] p-6 text-center space-y-2">
         <div className="flex items-center justify-center gap-2 text-on-surface">
           <Lock size={14} className="text-primary" />
-          <span className="text-sm font-bold">Payment integration coming soon</span>
+          <span className="text-sm font-bold">Secure payments via Razorpay</span>
         </div>
         <p className="text-xs text-on-surface-variant max-w-lg mx-auto">
-          For now, clicking Upgrade switches your plan in this demo so you can preview Plus and Exam Pro features.
-          Real UPI / Razorpay billing lands in the next release.
+          All transactions are encrypted and processed securely through Razorpay. UPI, cards, net banking, and wallets accepted.
         </p>
       </div>
 
