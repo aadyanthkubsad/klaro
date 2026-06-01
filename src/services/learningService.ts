@@ -24,6 +24,7 @@ import {
   WrittenAnswerAttempt,
   CognitiveLevel,
 } from '../types';
+import { schedulePush } from './syncService';
 
 const STORAGE_KEYS = {
   quizHistory: 'varkify:quizHistory',
@@ -55,6 +56,7 @@ function write<T>(key: string, value: T) {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(key, JSON.stringify(value));
     window.dispatchEvent(new Event(CHANGE_EVENT));
+    schedulePush(key);
   } catch {
     /* ignore quota errors */
   }

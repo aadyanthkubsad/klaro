@@ -10,6 +10,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { pullFromServer } from '../services/syncService';
 
 export interface AuthUser {
   id: string;
@@ -76,6 +77,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (data.success) {
           setUser(data.user);
           try { localStorage.setItem('klaro:plan', data.user.planType); } catch { /* ignore */ }
+          pullFromServer().catch(() => {});
         } else {
           localStorage.removeItem(TOKEN_KEY);
           setToken(null);
@@ -105,6 +107,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem('klaro:plan', data.user.planType);
     setToken(data.token);
     setUser(data.user);
+    pullFromServer().catch(() => {});
   };
 
   const register = async (email: string, password: string, displayName: string) => {
@@ -119,6 +122,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem('klaro:plan', data.user.planType);
     setToken(data.token);
     setUser(data.user);
+    pullFromServer().catch(() => {});
   };
 
   const logout = () => {

@@ -74,6 +74,8 @@ export interface WeeklyReport {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
+import { schedulePush } from './syncService';
+
 const STORAGE_KEY = 'klaro:activityLog';
 const STREAK_KEY = 'klaro:streak';
 const CHANGE_EVENT = 'klaro:activity-change';
@@ -109,6 +111,7 @@ function writeStorage<T>(key: string, value: T) {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(key, JSON.stringify(value));
     window.dispatchEvent(new Event(CHANGE_EVENT));
+    schedulePush(key);
   } catch {
     /* ignore quota errors */
   }

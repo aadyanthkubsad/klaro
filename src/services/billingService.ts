@@ -16,6 +16,7 @@
  */
 
 import { PlanType, PlanLimits, UsageCounters } from '../types';
+import { schedulePush } from './syncService';
 
 // ─── storage keys ───────────────────────────────────────────────────────────
 
@@ -298,6 +299,7 @@ function saveCounters(counters: UsageCounters): void {
   try {
     window.localStorage.setItem(KEYS.usage, JSON.stringify(counters));
     window.dispatchEvent(new Event(CHANGE_EVENT));
+    schedulePush(KEYS.usage);
   } catch { /* ignore */ }
 }
 
