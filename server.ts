@@ -15,7 +15,7 @@ import { getChapterAudioTarget, describeTarget } from './server/data/chapterWeig
 import { checkRateLimit, cleanupStaleEntries, getUsageStats, type EndpointBucket, type PlanType } from './server/rateLimiter.js';
 import { enqueueAIRequest, configureQueue, getQueueStats } from './server/queue.js';
 import { cacheGet, cacheSet, buildCacheKey, configureCache, getCacheStats, cleanupExpiredCache, cacheInvalidate } from './server/cache.js';
-import { initDatabase, flushDatabase, getStats, updateStats, getLibrary, addToLibrary, removeFromLibrary, cleanupLibrary, getKit, saveKit, getOrCreateUser, getUserPlan, incrementUserKitCount, getDatabaseStats, getAllKits, createUser, getUserByEmail, getUserById, updateUserPlan, createPaymentRecord, markPaymentPaid, getPaymentByOrderId } from './server/database.js';
+import { initDatabase, flushDatabase, getStats, updateStats, getLibrary, addToLibrary, removeFromLibrary, cleanupLibrary, getKit, saveKit, getOrCreateUser, getUserPlan, incrementUserKitCount, getDatabaseStats, getAllKits, createUser, getUserByEmail, getUserById, updateUserPlan, createPaymentRecord, markPaymentPaid, getPaymentByOrderId, getQuizAttempts, upsertQuizAttempts, getMistakeEntries, upsertMistakeEntries, getMasteryEntries, upsertMasteryEntries, getDailyTasksDb, upsertDailyTasks, getActivityLog, upsertActivityLog, getStreakInfo, upsertStreakInfo, getUsageCountersDb, upsertUsageCounter, getPlannerEventsDb, upsertPlannerEvents, getWrittenAnswersDb, upsertWrittenAnswers } from './server/database.js';
 import { authMiddleware, requireAuth, hashPassword, verifyPassword, generateToken } from './server/auth.js';
 import { createOrder, verifyPaymentSignature, isRazorpayConfigured, PLAN_PRICES } from './server/payments.js';
 import { verifyChapter, verifyAllChapters, getVerifiedSubjects } from './server/syllabusVerifier.js';
@@ -247,6 +247,56 @@ async function startServer() {
     } catch (err: any) {
       logger.error('Payment verification failed', { meta: { error: err.message } });
       res.status(500).json({ success: false, error: 'Payment verification failed' });
+    }
+  });
+
+  // ── Sync endpoints ──────────────────────────────────────────────────────
+
+  app.get('/api/sync/pull', requireAuth, (req: any, res) => {
+    try {
+      const userId = req.userId;
+      res.json({
+        success: true,
+        data: {
+          quizHistory: getQuizAttempts(userId),
+          mistakes: getMistakeEntries(userId),
+          mastery: getMasteryEntries(userId),
+          dailyTasks: getDailyTasksDb(userId),
+          activityLog: getActivityLog(userId),
+          streak: getStreakInfo(userId),
+          plannerEvents: getPlannerEventsDb(userId),
+          writtenAnswers: getWrittenAnswersDb(userId),
+        }
+      });
+    } catch (err: any) {
+      logger.error('Sync pull failed', { meta: { error: err.message } });
+      res.status(500).json({ success: false, error: 'Sync pull failed' });
+    }
+  });
+
+  app.post('/api/sync/push', requireAuth, (req: any, res) => {
+    try {
+      const userId = req.userId;
+      const { quizHistory, mistakes, mastery, dailyTasks, activityLog, streak, usageCounters, plannerEvents, writtenAnswers } = req.body;
+
+      if (quizHistory) upsertQuizAttempts(userId, quizHistory);
+      if (mistakes) upsertMistakeEntries(userId, mistakes);
+      if (mastery) upsertMasteryEntries(userId, mastery);
+      if (dailyTasks) upsertDailyTasks(userId, dailyTasks);
+      if (activityLog) upsertActivityLog(userId, activityLog);
+      if (streak) upsertStreakInfo(userId, streak);
+      if (usageCounters && Array.isArray(usageCounters)) {
+        for (const c of usageCounters) {
+          upsertUsageCounter(userId, c.date, c.type, c.value);
+        }
+      }
+      if (plannerEvents) upsertPlannerEvents(userId, plannerEvents);
+      if (writtenAnswers) upsertWrittenAnswers(userId, writtenAnswers);
+
+      res.json({ success: true });
+    } catch (err: any) {
+      logger.error('Sync push failed', { meta: { error: err.message } });
+      res.status(500).json({ success: false, error: 'Sync push failed' });
     }
   });
 
