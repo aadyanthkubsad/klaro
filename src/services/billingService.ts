@@ -32,7 +32,7 @@ const CHANGE_EVENT = 'klaro:billing-change';
  * feature surface is available without payment integration.
  * Set to false for production / realistic testing.
  */
-export const DEV_FORCE_PRO = true;
+export const DEV_FORCE_PRO = false;
 
 // ─── pricing data (exported for OffersView) ─────────────────────────────────
 

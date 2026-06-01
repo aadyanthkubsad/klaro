@@ -48,7 +48,6 @@ import {
   canDownloadPdf, incrementPdfDownloadsToday,
   canGenerateFlashcards, incrementFlashcardSetsToday,
   getUsageCounters,
-  DEV_FORCE_PRO,
 } from './services/billingService';
 import { logActivity } from './services/activityService';
 
@@ -739,15 +738,6 @@ export default function App() {
         onRetry={retryChapterGeneration}
       />
 
-      {/* DEV badge — visible reminder that Exam Pro is force-enabled for testing.
-          Toggle DEV_FORCE_PRO in billingService.ts to remove. */}
-      {DEV_FORCE_PRO && view !== 'landing' && (
-        <div className="fixed bottom-4 right-4 z-[80] flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 shadow-md text-[10px] font-black uppercase tracking-widest pointer-events-none">
-          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-          Exam Pro Demo Active
-        </div>
-      )}
-
       {/* Paywall modal — driven entirely by the PaywallConfig the caller passes */}
       {paywallOpen && (() => {
         const cfg = paywallOpen;
@@ -786,12 +776,6 @@ export default function App() {
                   className="w-full py-3 bg-primary text-white rounded-xl font-black uppercase tracking-widest text-xs hover:brightness-110"
                 >
                   {cfg.ctaLabel}
-                </button>
-                <button
-                  onClick={() => { changePlan(cfg.requiredPlan); setPaywallOpen(null); }}
-                  className="w-full py-2.5 bg-amber-50 text-amber-800 border border-amber-200 rounded-xl font-bold text-xs hover:bg-amber-100"
-                >
-                  DEV: Unlock {cfg.requiredPlan === 'pro' ? 'Exam Pro' : 'Plus'} for testing
                 </button>
                 {cfg.secondaryLabel && (
                   <button
