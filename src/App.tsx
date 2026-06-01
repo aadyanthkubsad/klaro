@@ -28,6 +28,8 @@ import { DoubtSolver } from './components/views/DoubtSolver';
 import { OffersView } from './components/views/OffersView';
 import { PracticeView, PracticeSnapshot } from './components/views/PracticeView';
 import { LandingPage } from './components/views/LandingPage';
+import { AuthView } from './components/views/AuthView';
+import { useAuth } from './contexts/AuthContext';
 import { LibraryItem, UserStats, ExamMode } from './types';
 import { updateLibraryItems } from './services/libraryService';
 import { TodoView } from './components/views/TodoView';
@@ -52,6 +54,7 @@ import { logActivity } from './services/activityService';
 
 export default function App() {
   console.log('App rendering');
+  const { user, logout } = useAuth();
   const [view, _setViewRaw] = useState('landing');
   // Navigation history — every setView() call pushes the *previous* view so
   // the global Back pill always returns the user to where they came from.
@@ -62,6 +65,13 @@ export default function App() {
   const viewRef = React.useRef(view);
   React.useEffect(() => { viewRef.current = view; }, [view]);
   const skipHistoryRef = React.useRef(false);
+  // Auto-redirect authenticated users past landing/auth screens.
+  React.useEffect(() => {
+    if (user && (view === 'auth' || view === 'landing')) {
+      skipHistoryRef.current = true;
+      _setViewRaw('dashboard');
+    }
+  }, [user, view]);
   const setView = React.useCallback((next: string) => {
     if (!skipHistoryRef.current && viewRef.current && viewRef.current !== next) {
       setViewHistory(h => [...h, viewRef.current]);
@@ -656,11 +666,11 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex bg-surface-container-lowest">
-      {view !== 'landing' && <Sidebar currentView={view} setView={setView} stats={userStats} />}
+      {view !== 'landing' && view !== 'auth' && <Sidebar currentView={view} setView={setView} stats={userStats} user={user} onLogout={() => { logout(); setView('landing'); }} />}
       
-      <main className={`flex-1 ${view === 'landing' ? '' : 'md:ml-64'} overflow-x-hidden transition-all duration-500`}>
+      <main className={`flex-1 ${view === 'landing' || view === 'auth' ? '' : 'md:ml-64'} overflow-x-hidden transition-all duration-500`}>
         {/* Global Back pill — appears on every secondary view, navigates the real history stack */}
-        {view !== 'landing' && view !== 'dashboard' && (
+        {view !== 'landing' && view !== 'auth' && view !== 'dashboard' && (
           <div className="sticky top-0 z-30 px-6 md:px-10 pt-6 pb-2 bg-surface-container-lowest/80 backdrop-blur-sm">
             <button
               onClick={goBack}
@@ -676,6 +686,7 @@ export default function App() {
         )}
         <AnimatePresence mode="wait">
           {view === 'landing' && <LandingPage setView={setView} />}
+          {view === 'auth' && <AuthView onSkip={() => setView('dashboard')} />}
           {view === 'dashboard' && <Dashboard setView={setView} generateKit={generateKit} navigateToKit={navigateToKit} library={library} stats={userStats} examMode={examMode} setExamMode={setExamMode} />}
           {view === 'library' && <LibraryView library={library} stats={userStats} setView={setView} navigateToKit={navigateToKit} navigateToMistakes={(topic) => { setMistakesTopicFilter(topic); setView('mistakes'); }} viewWrongAnswers={viewWrongAnswers} goToScoreAnalysis={goToScoreAnalysis} onPickChapter={(c) => { setChapterGenError(null); setChapterPicker(c); }} onRemoveDuplicates={async () => { const res = await fetch('/api/cleanup-library', { method: 'POST' }); const json = await res.json(); if (json.success) { setLibrary(json.data.library); setUserStats(json.data.stats); } }} onDeleteLibraryItem={async (id) => { setLibrary(prev => prev.filter(it => it.id !== id)); try { const res = await fetch('/api/delete-library-item', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); if (res.ok) { const json = await res.json(); if (json.success) { setLibrary(json.data.library); setUserStats(json.data.stats); } } } catch { /* server sync — item is already removed from local state */ } }} onGeneratePracticeFromPattern={async (paper: PaperSource) => { try { setIsLoading(true); const quiz = await aiService.generatePracticeFromPattern({ subject: paper.subject, year: paper.year, paperType: paper.type }); setCurrentAIQuiz(quiz); setCurrentAIQuizMode('revision-kit'); setView('ai-quiz'); } catch (e: any) { showToast(e?.message || 'Practice test generation failed.', 'error'); } finally { setIsLoading(false); } }} onSavePaperToLibrary={(paper: PaperSource) => { const typeMap: Record<string, string> = { 'sample-paper': 'sample-paper', 'previous-year': 'previous-year-paper', 'marking-scheme': 'marking-scheme' }; saveToLibrary({ title: `${paper.subject} ${paper.year} ${paper.type.replace('-', ' ')}`, type: (typeMap[paper.type] || 'sample-paper') as any, contentSnippet: `CBSE ${paper.classLevel} — Official ${paper.type.replace('-', ' ')} (${paper.year}). Source: ${paper.sourceName}`, tags: [paper.subject, paper.year, paper.type], }); }} />}
           {view === 'analytics' && <AnalyticsView library={library} activeTab={analyticsTab} setActiveTab={setAnalyticsTab} stats={userStats} onSave={saveToLibrary} setView={setView} kit={currentAnalysis} currentTopic={currentRevisionKit?.topic || currentRevisionKit?.chapterTitle} />}
@@ -700,7 +711,7 @@ export default function App() {
           {view === 'offers' && <OffersView setView={setView} planType={planType} changePlan={changePlan} />}
           {view === 'test-review' && <TestReviewView attemptId={selectedQuizAttemptId} setView={setView} generateFocusedReview={generateFocusedReview} />}
 
-          {!['dashboard', 'selection', 'camera', 'visual', 'quiz', 'ai-quiz', 'landing', 'readwrite', 'aural', 'analytics', 'library', 'progress', 'tests', 'practice', 'settings', 'mistakes', 'doubt-solver', 'todo', 'revision-engine', 'offers', 'test-review', 'flashcards', 'monthly-planner', 'youtube-study'].includes(view) && (
+          {!['dashboard', 'selection', 'camera', 'visual', 'quiz', 'ai-quiz', 'landing', 'auth', 'readwrite', 'aural', 'analytics', 'library', 'progress', 'tests', 'practice', 'settings', 'mistakes', 'doubt-solver', 'todo', 'revision-engine', 'offers', 'test-review', 'flashcards', 'monthly-planner', 'youtube-study'].includes(view) && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center justify-center min-h-[70vh]">
               <h2 className="text-4xl font-bold text-gray-300">Under Construction</h2>
               <button 

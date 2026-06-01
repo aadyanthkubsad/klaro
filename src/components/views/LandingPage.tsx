@@ -57,8 +57,8 @@ export const LandingPage = ({ setView }: LandingPageProps) => {
               Start VARK Assessment
               <ArrowRight size={20} />
             </button>
-            <button 
-              onClick={() => setView('dashboard')}
+            <button
+              onClick={() => setView('auth')}
               className="px-10 py-5 bg-white/5 border border-white/10 text-white rounded-2xl font-black uppercase tracking-widest text-sm hover:bg-white/10 transition-all"
             >
               Explore Dashboard

@@ -4,17 +4,20 @@
  */
 
 import React from 'react';
-import { Home, Library, BarChart, PieChart, Target, AlertCircle, MessageSquare, Settings, Zap, User, CheckSquare, Sparkles } from 'lucide-react';
+import { Home, Library, BarChart, PieChart, Target, AlertCircle, MessageSquare, Settings, Zap, User, CheckSquare, Sparkles, LogOut } from 'lucide-react';
 import { motion } from 'motion/react';
 import { UserStats } from '../../types';
+import { AuthUser } from '../../contexts/AuthContext';
 
 interface SidebarProps {
   currentView: string;
   setView: (v: string) => void;
   stats: UserStats;
+  user?: AuthUser | null;
+  onLogout?: () => void;
 }
 
-export const Sidebar = ({ currentView, setView, stats }: SidebarProps) => {
+export const Sidebar = ({ currentView, setView, stats, user, onLogout }: SidebarProps) => {
   const navItems = [
     { id: 'dashboard', label: 'Home', icon: Home },
     { id: 'todo', label: 'Tasks', icon: CheckSquare },
@@ -87,11 +90,22 @@ export const Sidebar = ({ currentView, setView, stats }: SidebarProps) => {
         <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center border border-primary/30">
           <User size={20} className="text-primary" />
         </div>
-        <div>
-          <h4 className="text-sm font-bold text-white leading-none">Learner</h4>
-          <p className="text-[10px] font-bold text-navy-muted mt-1">Level {stats.level} Scholar</p>
+        <div className="flex-1 min-w-0">
+          <h4 className="text-sm font-bold text-white leading-none truncate">{user?.displayName || 'Learner'}</h4>
+          <p className="text-[10px] font-bold text-navy-muted mt-1">{user ? user.email : `Level ${stats.level} Scholar`}</p>
         </div>
       </div>
+      {user && onLogout && (
+        <div className="px-3 mt-4">
+          <button
+            onClick={onLogout}
+            className="flex items-center gap-4 px-8 py-3 rounded w-full text-navy-muted hover:text-white hover:bg-navy-hover transition-colors"
+          >
+            <LogOut size={18} className="opacity-60" />
+            <span className="text-sm">Sign Out</span>
+          </button>
+        </div>
+      )}
     </nav>
   );
 };
