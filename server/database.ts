@@ -7,7 +7,9 @@
  * Uses better-sqlite3 for synchronous, fast, embedded database.
  * Data is stored in ./data/klaro.db — survives server restarts.
  *
- * Tables: users, stats, library_items, kits, payments, sessions
+ * Tables: users, stats, library_items, kits, payments, sessions,
+ *   quiz_attempts, mistake_entries, mastery_entries, daily_tasks,
+ *   activity_log, usage_counters, planner_events, written_answers, streak_info
  *
  * On first run, automatically migrates data from the legacy
  * klaro-db.json file (if present) into SQLite.
@@ -285,4 +287,223 @@ export function getDatabaseStats() {
   const library = (db.prepare('SELECT COUNT(*) as c FROM library_items').get() as any).c;
   const dbSize = fs.existsSync(DB_PATH) ? fs.statSync(DB_PATH).size : 0;
   return { users, kits, libraryItems: library, dbSizeBytes: dbSize };
+}
+
+// ─── Quiz Attempts ──────────────────────────────────────────────────────────
+
+export function getQuizAttempts(userId: string): any[] {
+  return db.prepare('SELECT * FROM quiz_attempts WHERE user_id = ? ORDER BY created_at DESC').all(userId);
+}
+
+export function upsertQuizAttempts(userId: string, attempts: any[]): void {
+  const upsert = db.prepare(`
+    INSERT INTO quiz_attempts (id, user_id, topic, chapter_title, subject, score, total, percentage, weak_topics, answers, mode_used, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      score = excluded.score, total = excluded.total, percentage = excluded.percentage,
+      weak_topics = excluded.weak_topics, answers = excluded.answers
+  `);
+  const batch = db.transaction(() => {
+    for (const a of attempts) {
+      upsert.run(
+        a.id, userId, a.topic || '', a.chapterTitle || a.chapter_title || '', a.subject || '',
+        a.score || 0, a.total || 0, a.percentage || 0,
+        JSON.stringify(a.weakTopics || a.weak_topics || []),
+        JSON.stringify(a.answers || []),
+        a.modeUsed || a.mode_used || '', a.createdAt || a.created_at || new Date().toISOString()
+      );
+    }
+  });
+  batch();
+}
+
+// ─── Mistake Entries ────────────────────────────────────────────────────────
+
+export function getMistakeEntries(userId: string): any[] {
+  return db.prepare('SELECT * FROM mistake_entries WHERE user_id = ? ORDER BY created_at DESC').all(userId);
+}
+
+export function upsertMistakeEntries(userId: string, entries: any[]): void {
+  const upsert = db.prepare(`
+    INSERT INTO mistake_entries (id, user_id, quiz_id, topic, question, selected_answer, correct_answer, explanation, topic_tag, mode_used, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO NOTHING
+  `);
+  const batch = db.transaction(() => {
+    for (const e of entries) {
+      upsert.run(
+        e.id, userId, e.quizId || e.quiz_id || '', e.topic || '', e.question || '',
+        e.selectedAnswer || e.selected_answer || '', e.correctAnswer || e.correct_answer || '',
+        e.explanation || '', e.topicTag || e.topic_tag || '',
+        e.modeUsed || e.mode_used || '', e.createdAt || e.created_at || new Date().toISOString()
+      );
+    }
+  });
+  batch();
+}
+
+// ─── Mastery Entries ────────────────────────────────────────────────────────
+
+export function getMasteryEntries(userId: string): any[] {
+  return db.prepare('SELECT * FROM mastery_entries WHERE user_id = ?').all(userId);
+}
+
+export function upsertMasteryEntries(userId: string, entries: any[]): void {
+  const upsert = db.prepare(`
+    INSERT INTO mastery_entries (id, user_id, topic, mastery_score, status, last_attempt_date, next_revision_date, forgetting_risk, attempts, mistake_count)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      mastery_score = excluded.mastery_score, status = excluded.status,
+      last_attempt_date = excluded.last_attempt_date, next_revision_date = excluded.next_revision_date,
+      forgetting_risk = excluded.forgetting_risk, attempts = excluded.attempts, mistake_count = excluded.mistake_count
+  `);
+  const batch = db.transaction(() => {
+    for (const e of entries) {
+      upsert.run(
+        e.id || `mastery-${e.topic}`, userId, e.topic,
+        e.masteryScore || e.mastery_score || 0.3,
+        e.status || 'not-started',
+        e.lastAttemptDate || e.last_attempt_date || null,
+        e.nextRevisionDate || e.next_revision_date || null,
+        e.forgettingRisk || e.forgetting_risk || 'unknown',
+        e.attempts || 0, e.mistakeCount || e.mistake_count || 0
+      );
+    }
+  });
+  batch();
+}
+
+// ─── Daily Tasks ────────────────────────────────────────────────────────────
+
+export function getDailyTasksDb(userId: string): any[] {
+  return db.prepare('SELECT * FROM daily_tasks WHERE user_id = ? ORDER BY due_date ASC').all(userId);
+}
+
+export function upsertDailyTasks(userId: string, tasks: any[]): void {
+  const upsert = db.prepare(`
+    INSERT INTO daily_tasks (id, user_id, source_quiz_id, source_kit_id, title, topic, due_date, action_type, status, completed_date, estimated_minutes, reason, plan_required)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      status = excluded.status, completed_date = excluded.completed_date
+  `);
+  const batch = db.transaction(() => {
+    for (const t of tasks) {
+      upsert.run(
+        t.id, userId, t.sourceQuizId || t.source_quiz_id || '',
+        t.sourceKitId || t.source_kit_id || '', t.title || '',
+        t.topic || '', t.dueDate || t.due_date || '',
+        t.actionType || t.action_type || '', t.status || 'pending',
+        t.completedDate || t.completed_date || null,
+        t.estimatedMinutes || t.estimated_minutes || 10,
+        t.reason || '', t.planRequired || t.plan_required || null
+      );
+    }
+  });
+  batch();
+}
+
+// ─── Activity Log ───────────────────────────────────────────────────────────
+
+export function getActivityLog(userId: string): any[] {
+  return db.prepare('SELECT * FROM activity_log WHERE user_id = ? ORDER BY created_at DESC').all(userId);
+}
+
+export function upsertActivityLog(userId: string, activities: any[]): void {
+  const upsert = db.prepare(`
+    INSERT INTO activity_log (id, user_id, type, chapter_id, chapter_title, subject, xp_earned, meta, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO NOTHING
+  `);
+  const batch = db.transaction(() => {
+    for (const a of activities) {
+      upsert.run(
+        a.id, userId, a.type,
+        a.chapterId || a.chapter_id || '',
+        a.chapterTitle || a.chapter_title || '',
+        a.subject || '', a.xpEarned || a.xp_earned || 0,
+        JSON.stringify(a.meta || {}),
+        a.createdAt || a.created_at || new Date().toISOString()
+      );
+    }
+  });
+  batch();
+}
+
+// ─── Streak ─────────────────────────────────────────────────────────────────
+
+export function getStreakInfo(userId: string): any {
+  return db.prepare('SELECT * FROM streak_info WHERE user_id = ?').get(userId) || {
+    current_streak: 0, longest_streak: 0, last_active_date: null, is_active_today: 0
+  };
+}
+
+export function upsertStreakInfo(userId: string, streak: any): void {
+  db.prepare(`
+    INSERT INTO streak_info (user_id, current_streak, longest_streak, last_active_date, is_active_today)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      current_streak = excluded.current_streak, longest_streak = excluded.longest_streak,
+      last_active_date = excluded.last_active_date, is_active_today = excluded.is_active_today
+  `).run(userId, streak.current || 0, streak.longest || 0, streak.lastActiveDate || streak.last_active_date || null, streak.isActiveToday ? 1 : 0);
+}
+
+// ─── Usage Counters ─────────────────────────────────────────────────────────
+
+export function getUsageCountersDb(userId: string, date: string): any[] {
+  return db.prepare('SELECT * FROM usage_counters WHERE user_id = ? AND counter_date = ?').all(userId, date);
+}
+
+export function upsertUsageCounter(userId: string, date: string, counterType: string, value: number): void {
+  db.prepare(`
+    INSERT INTO usage_counters (user_id, counter_date, counter_type, value)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id, counter_date, counter_type) DO UPDATE SET value = excluded.value
+  `).run(userId, date, counterType, value);
+}
+
+// ─── Planner Events ─────────────────────────────────────────────────────────
+
+export function getPlannerEventsDb(userId: string): any[] {
+  return db.prepare('SELECT * FROM planner_events WHERE user_id = ? ORDER BY date ASC').all(userId);
+}
+
+export function upsertPlannerEvents(userId: string, events: any[]): void {
+  const upsert = db.prepare(`
+    INSERT INTO planner_events (id, user_id, title, date, type, source)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET title = excluded.title, date = excluded.date
+  `);
+  const batch = db.transaction(() => {
+    for (const e of events) {
+      upsert.run(e.id, userId, e.title, e.date, e.type || 'exam', e.source || null);
+    }
+  });
+  batch();
+}
+
+// ─── Written Answers ────────────────────────────────────────────────────────
+
+export function getWrittenAnswersDb(userId: string): any[] {
+  return db.prepare('SELECT * FROM written_answers WHERE user_id = ? ORDER BY created_at DESC').all(userId);
+}
+
+export function upsertWrittenAnswers(userId: string, answers: any[]): void {
+  const upsert = db.prepare(`
+    INSERT INTO written_answers (id, user_id, question, student_answer, marks_scored, total_marks, missing_keywords, strengths, improvements, model_answer, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO NOTHING
+  `);
+  const batch = db.transaction(() => {
+    for (const a of answers) {
+      upsert.run(
+        a.id, userId, a.question || '', a.studentAnswer || a.student_answer || '',
+        a.marksScored || a.marks_scored || 0, a.totalMarks || a.total_marks || 0,
+        JSON.stringify(a.missingKeywords || a.missing_keywords || []),
+        JSON.stringify(a.strengths || []), JSON.stringify(a.improvements || []),
+        a.modelAnswer || a.model_answer || '',
+        a.createdAt || a.created_at || new Date().toISOString()
+      );
+    }
+  });
+  batch();
 }
