@@ -8,6 +8,7 @@ import { UserCircle, Palette, Bell, Shield, ChevronRight, Camera, Edit3, CheckCi
 import { motion } from 'motion/react';
 import { TopBar } from '../common/TopBar';
 import { PlanType, PlanLimits, UsageCounters } from '../../types';
+import { AuthUser } from '../../contexts/AuthContext';
 
 interface SettingsViewProps {
   planType?: PlanType;
@@ -17,9 +18,10 @@ interface SettingsViewProps {
   setView?: (v: string) => void;
   usageCounters?: UsageCounters;
   planLimits?: PlanLimits;
+  user?: AuthUser | null;
 }
 
-export const SettingsView = ({ planType = 'free', changePlan, kitsUsedToday = 0, dailyLimit = 3, setView, usageCounters, planLimits }: SettingsViewProps) => {
+export const SettingsView = ({ planType = 'free', changePlan, kitsUsedToday = 0, dailyLimit = 3, setView, usageCounters, planLimits, user }: SettingsViewProps) => {
   const [activeSection, setActiveSection] = useState('account');
   const [darkMode, setDarkMode] = useState(false);
   const [primaryColor, setPrimaryColor] = useState('#2563eb');
@@ -176,30 +178,27 @@ export const SettingsView = ({ planType = 'free', changePlan, kitsUsedToday = 0,
               
               <div className="flex flex-col md:flex-row items-center gap-8">
                 <div className="relative group">
-                  <div className="w-24 h-24 rounded-3xl overflow-hidden border-4 border-white shadow-xl">
-                    <img src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=150&h=150&auto=format&fit=crop" className="w-full h-full object-cover" alt="Profile" />
+                  <div className="w-24 h-24 rounded-3xl overflow-hidden border-4 border-white shadow-xl bg-primary/10 flex items-center justify-center">
+                    <span className="text-3xl font-black text-primary">{(user?.displayName || 'L')[0].toUpperCase()}</span>
                   </div>
-                  <button className="absolute -bottom-2 -right-2 bg-primary text-white w-8 h-8 rounded-xl flex items-center justify-center shadow-lg hover:scale-110 transition-all border-2 border-white">
-                    <Camera size={14} />
-                  </button>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-6 flex-1">
                   <div>
                     <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-[0.2em] block mb-1.5">Full Name</label>
-                    <p className="font-bold text-on-surface">Alex Rivera</p>
+                    <p className="font-bold text-on-surface">{user?.displayName || 'Guest Learner'}</p>
                   </div>
                   <div>
                     <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-[0.2em] block mb-1.5">Email Address</label>
-                    <p className="font-bold text-on-surface">alex.rivera@example.com</p>
+                    <p className="font-bold text-on-surface">{user?.email || 'Not signed in'}</p>
                   </div>
                   <div>
                     <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-[0.2em] block mb-1.5">Learning Track</label>
-                    <div className="inline-flex px-3 py-1 bg-primary/10 text-primary rounded-lg font-bold text-[11px] uppercase tracking-wider mt-1">UX Design</div>
+                    <div className="inline-flex px-3 py-1 bg-primary/10 text-primary rounded-lg font-bold text-[11px] uppercase tracking-wider mt-1">CBSE Class 10</div>
                   </div>
                   <div>
                     <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-[0.2em] block mb-1.5">Membership</label>
-                    <p className="font-bold text-on-surface">Standard Plan</p>
+                    <p className="font-bold text-on-surface">{planType === 'pro' ? 'Exam Pro' : planType === 'plus' ? 'Student Plus' : 'Free Plan'}</p>
                   </div>
                 </div>
               </div>

@@ -670,9 +670,9 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
                       </p>
                     )}
 
-                    {item.tags && item.tags.filter(t => !t.startsWith('lang:') && !t.startsWith('chapter:')).length > 0 && (
+                    {item.tags && item.tags.filter(t => !t.startsWith('lang:') && !t.startsWith('chapter:') && !(t === 'JEE' && item.tags.includes('Class 10'))).length > 0 && (
                       <div className="flex flex-wrap gap-1 mb-4">
-                        {item.tags.filter(t => !t.startsWith('lang:') && !t.startsWith('chapter:')).slice(0, 3).map(t => (
+                        {item.tags.filter(t => !t.startsWith('lang:') && !t.startsWith('chapter:') && !(t === 'JEE' && item.tags.includes('Class 10'))).slice(0, 3).map(t => (
                           <span key={t} className="px-2 py-0.5 bg-surface-container-low text-[9px] rounded font-bold text-on-surface-variant uppercase">{t}</span>
                         ))}
                       </div>
@@ -1155,7 +1155,7 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
                 </div>
                 {getLibraryTabForItem(item.type) === 'analysis' && item.tags && item.tags.length > 0 && (
                   <div className="flex flex-wrap gap-1 mt-2">
-                    {item.tags.map(t => <span key={t} className="px-2 py-0.5 bg-surface-container-low text-[9px] rounded-sm font-bold text-on-surface-variant uppercase">{t}</span>)}
+                    {item.tags.filter(t => !t.startsWith('lang:') && !t.startsWith('chapter:') && !(t === 'JEE' && item.tags.includes('Class 10'))).map(t => <span key={t} className="px-2 py-0.5 bg-surface-container-low text-[9px] rounded-sm font-bold text-on-surface-variant uppercase">{t}</span>)}
                   </div>
                 )}
               </div>

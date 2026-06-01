@@ -90,7 +90,7 @@ export default function App() {
       return h.slice(0, -1);
     });
   }, []);
-  const [examMode, setExamMode] = useState<ExamMode>('JEE');
+  const [examMode, setExamMode] = useState<ExamMode>('CBSE');
   const [userStats, setUserStats] = useState<UserStats>({
     streak: 0,
     xp: 0,
@@ -694,7 +694,7 @@ export default function App() {
           {view === 'todo' && <TodoView setView={setView} library={library} openFlashcards={openFlashcards} openMistakesForTopic={openMistakesForTopic} openMonthlyPlanner={openMonthlyPlanner} isPremium={planLimits.monthlyPlanner} planType={planType} showPaywall={(cfg) => setPaywallOpen(cfg)} />}
           {view === 'flashcards' && <FlashcardsView set={flashcardSet} isLoading={flashcardsLoading} error={flashcardsError} setView={setView} onRetry={retryFlashcards} />}
           {view === 'monthly-planner' && planLimits.monthlyPlanner && <MonthlyPlannerView setView={setView} openFlashcards={openFlashcards} openMistakesForTopic={openMistakesForTopic} />}
-          {view === 'settings' && <SettingsView planType={planType} changePlan={changePlan} kitsUsedToday={getKitsUsedToday()} dailyLimit={planLimits.dailyKitsLimit} setView={setView} usageCounters={getUsageCounters()} planLimits={planLimits} />}
+          {view === 'settings' && <SettingsView planType={planType} changePlan={changePlan} kitsUsedToday={getKitsUsedToday()} dailyLimit={planLimits.dailyKitsLimit} setView={setView} usageCounters={getUsageCounters()} planLimits={planLimits} user={user} />}
           {view === 'selection' && <LearningStyleSelector setView={setView} kit={currentRevisionKit} onSave={saveToLibrary} />}
           {view === 'camera' && <CameraScan setView={setView} setRevisionKit={setCurrentRevisionKit} />}
           {view === 'visual' && <VisualHub setView={setView} onSave={saveToLibrary} kit={currentRevisionKit} stats={userStats} saveMistake={saveMistake} openFlashcards={openFlashcards} openPremium3D={openPremium3D} isPro={planLimits.premium3D} />}

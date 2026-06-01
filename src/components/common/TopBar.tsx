@@ -7,6 +7,7 @@ import React, { useState } from 'react';
 import { Search, Library, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { LibraryItem } from '../../types';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface TopBarProps {
   title: string;
@@ -15,6 +16,7 @@ interface TopBarProps {
 }
 
 export const TopBar = ({ title, subtitle, library = [] }: TopBarProps) => {
+  const { user } = useAuth();
   const [query, setQuery] = useState('');
   const [isFocused, setIsFocused] = useState(false);
 
@@ -96,15 +98,11 @@ export const TopBar = ({ title, subtitle, library = [] }: TopBarProps) => {
         </div>
         <div className="flex items-center gap-4">
           <div className="text-right hidden md:block">
-            <div className="text-sm font-semibold text-on-surface leading-tight">Alex Rivera</div>
-            <div className="text-[11px] text-on-surface-variant font-medium">Class 12 • JEE Aspirant</div>
+            <div className="text-sm font-semibold text-on-surface leading-tight">{user?.displayName || 'Learner'}</div>
+            <div className="text-[11px] text-on-surface-variant font-medium">Class 10 • CBSE</div>
           </div>
-          <div className="h-9 w-9 rounded-full overflow-hidden border-2 border-white shadow-sm ring-1 ring-slate-200">
-            <img 
-              src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=150&h=150&auto=format&fit=crop" 
-              alt="User Profile" 
-              className="w-full h-full object-cover"
-            />
+          <div className="h-9 w-9 rounded-full overflow-hidden border-2 border-white shadow-sm ring-1 ring-slate-200 bg-primary/10 flex items-center justify-center">
+            <span className="text-sm font-black text-primary">{(user?.displayName || 'L')[0].toUpperCase()}</span>
           </div>
         </div>
       </div>
