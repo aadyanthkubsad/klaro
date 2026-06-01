@@ -52,7 +52,6 @@ import {
 import { logActivity } from './services/activityService';
 
 export default function App() {
-  console.log('App rendering');
   const { user, logout } = useAuth();
   const [view, _setViewRaw] = useState('landing');
   // Navigation history — every setView() call pushes the *previous* view so
