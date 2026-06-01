@@ -106,30 +106,6 @@ export const SettingsView = ({ planType = 'free', changePlan, kitsUsedToday = 0,
               </button>
             </div>
 
-            {/* DEV plan toggle — no real billing yet */}
-            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
-              <p className="text-[10px] font-black text-amber-800 uppercase tracking-widest mb-3">
-                DEV: switch plan for testing
-              </p>
-              <div className="flex gap-2">
-                {(['free', 'plus', 'pro'] as PlanType[]).map(p => (
-                  <button
-                    key={p}
-                    onClick={() => changePlan?.(p)}
-                    className={`flex-1 px-4 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all ${
-                      planType === p
-                        ? 'bg-amber-600 text-white'
-                        : 'bg-white text-amber-800 border border-amber-300 hover:bg-amber-100'
-                    }`}
-                  >
-                    {p === 'pro' ? 'Exam Pro' : p === 'plus' ? 'Plus' : 'Free'}
-                  </button>
-                ))}
-              </div>
-              <p className="text-[10px] text-amber-700 mt-2">
-                Payment integration coming soon. This toggle previews paid features locally.
-              </p>
-            </div>
           </div>
 
           {/* Usage counters card */}
