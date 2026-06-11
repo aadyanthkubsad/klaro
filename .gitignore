@@ -13,4 +13,4 @@ server_log.txt
 fetch_debug.*
 test_env.cjs
 .claude/
-data/
+/data/
