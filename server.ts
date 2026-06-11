@@ -106,6 +106,7 @@ async function startServer() {
   process.on('SIGINT', shutdown);
 
   const app = express();
+  app.set('trust proxy', 1); // Required on Railway — reads real client IP from X-Forwarded-For
   const PORT = parseInt(process.env.PORT || '3000', 10);
 
   // Security headers
