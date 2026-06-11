@@ -103,7 +103,7 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
   const [paperYearFilter, setPaperYearFilter] = useState<PaperYear | 'All'>('All');
   const [paperTypeFilter, setPaperTypeFilter] = useState<PaperType | 'All'>('All');
   const [savedPaperIds, setSavedPaperIds] = useState<Set<string>>(() => {
-    try { return new Set(JSON.parse(localStorage.getItem('klaro-saved-papers') || '[]')); } catch { return new Set(); }
+    try { return new Set(JSON.parse(localStorage.getItem('lumina-saved-papers') || '[]')); } catch { return new Set(); }
   });
 
   const filteredPapers = useMemo(
@@ -115,7 +115,7 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
     setSavedPaperIds(prev => {
       const next = new Set(prev);
       if (next.has(paper.id)) next.delete(paper.id); else next.add(paper.id);
-      localStorage.setItem('klaro-saved-papers', JSON.stringify([...next]));
+      localStorage.setItem('lumina-saved-papers', JSON.stringify([...next]));
       return next;
     });
     onSavePaperToLibrary?.(paper);
@@ -156,6 +156,44 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
   // Strip legacy "Audio: " / "Visual: " / "Read/Write: " prefixes used by older saves.
   const stripModePrefix = (t: string) =>
     t.replace(/^\s*(audio|visual|read\/write|readwrite|read|write)\s*[:\-–]\s*/i, '').trim();
+
+  /**
+   * Compute a meaningful progress % for a saved library item.
+   * - 30%: Kit content exists (it was saved → it exists)
+   * - 20%: Has multiple learning modes saved for this chapter
+   * - 25%: Quiz taken for this topic
+   * - 25%: Mastery score (mapped from 0-100 → 0-25)
+   */
+  const computeProgress = (item: LibraryItem): number => {
+    const titleKey = stripModePrefix(item.title).toLowerCase();
+    let progress = 30; // Base: content was generated & saved
+
+    // +20 if multiple modes saved for this chapter
+    const siblings = library.filter(it =>
+      getLibraryTabForItem(it.type) === 'saved' &&
+      stripModePrefix(it.title).toLowerCase() === titleKey
+    );
+    if (siblings.length > 1) progress += 20;
+
+    // +25 if a quiz was taken for this topic
+    const hasQuiz = quizAttempts.some(q =>
+      (q.topic || '').toLowerCase().includes(titleKey) ||
+      titleKey.includes((q.topic || '').toLowerCase()) ||
+      (q.chapterTitle || '').toLowerCase() === titleKey
+    );
+    if (hasQuiz) progress += 25;
+
+    // +25 based on mastery score
+    const m = mastery.find(me =>
+      me.topic.trim().toLowerCase() === titleKey ||
+      titleKey.includes(me.topic.trim().toLowerCase())
+    );
+    if (m) {
+      progress += Math.round((m.masteryScore / 100) * 25);
+    }
+
+    return Math.min(progress, 100);
+  };
 
   // Group saved revision kits by chapter title (after stripping legacy prefixes).
   const savedByTitle = useMemo(() => {
@@ -572,6 +610,21 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
           if (type === 'revision-kit') return 'bg-primary/10 text-primary';
           return 'bg-surface-container text-on-surface-variant';
         };
+        /** Subject-based accent color for left border & progress bar */
+        const subjectAccent = (tags?: string[]) => {
+          if (!tags) return { border: 'border-l-primary', bar: 'bg-primary', bg: 'bg-primary/5', tagBg: 'bg-primary/10 text-primary' };
+          const sub = tags.find(t => ['science','physics','chemistry','biology','mathematics','maths','english','hindi','social science','accountancy','business studies','economics','history','geography','political science'].includes(t.toLowerCase()));
+          const s = (sub || '').toLowerCase();
+          if (['physics','science'].includes(s))            return { border: 'border-l-blue-500',    bar: 'bg-blue-500',    bg: 'bg-blue-50',    tagBg: 'bg-blue-100 text-blue-700' };
+          if (s === 'chemistry')                            return { border: 'border-l-emerald-500', bar: 'bg-emerald-500', bg: 'bg-emerald-50', tagBg: 'bg-emerald-100 text-emerald-700' };
+          if (s === 'biology')                              return { border: 'border-l-green-500',   bar: 'bg-green-500',   bg: 'bg-green-50',   tagBg: 'bg-green-100 text-green-700' };
+          if (['mathematics','maths'].includes(s))          return { border: 'border-l-violet-500',  bar: 'bg-violet-500',  bg: 'bg-violet-50',  tagBg: 'bg-violet-100 text-violet-700' };
+          if (s === 'english')                              return { border: 'border-l-rose-500',    bar: 'bg-rose-500',    bg: 'bg-rose-50',    tagBg: 'bg-rose-100 text-rose-700' };
+          if (s === 'hindi')                                return { border: 'border-l-orange-500',  bar: 'bg-orange-500',  bg: 'bg-orange-50',  tagBg: 'bg-orange-100 text-orange-700' };
+          if (['social science','history','geography','political science'].includes(s)) return { border: 'border-l-amber-500', bar: 'bg-amber-500', bg: 'bg-amber-50', tagBg: 'bg-amber-100 text-amber-700' };
+          if (['accountancy','business studies','economics'].includes(s)) return { border: 'border-l-cyan-500', bar: 'bg-cyan-500', bg: 'bg-cyan-50', tagBg: 'bg-cyan-100 text-cyan-700' };
+          return { border: 'border-l-primary', bar: 'bg-primary', bg: 'bg-primary/5', tagBg: 'bg-primary/10 text-primary' };
+        };
         const ModeIcon = ({ type }: { type: string }) => {
           if (type === 'visual')    return <Eye size={11} />;
           if (type === 'aural')     return <Mic size={11} />;
@@ -631,73 +684,78 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-                {filtered.map(item => (
-                  <div
-                    key={item.id}
-                    onClick={() => { if (wasLongPress.current) { wasLongPress.current = false; return; } navigateToKit(item.id, item.type); }}
-                    onPointerDown={() => startLongPress({ id: item.id, title: stripModePrefix(item.title), section: 'saved' })}
-                    onPointerUp={endLongPress}
-                    onPointerLeave={endLongPress}
-                    onPointerCancel={endLongPress}
-                    onContextMenu={e => e.preventDefault()}
-                    className="bg-white border border-surface-container rounded-[24px] p-6 shadow-sm flex flex-col cursor-pointer hover:-translate-y-1 hover:shadow-md hover:border-primary/30 transition-all group select-none"
-                  >
-                    <div className="flex items-start justify-between gap-3 mb-3">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest shrink-0 ${modeBadgeStyle(item.type)}`}>
-                        <ModeIcon type={item.type} />
-                        {modeLabel(item.type)}
-                      </span>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <span className="text-[10px] font-bold text-on-surface-variant/60 uppercase">{item.date}</span>
+                {filtered.map(item => {
+                  const accent = subjectAccent(item.tags);
+                  const progress = computeProgress(item);
+                  const visibleTags = (item.tags || []).filter(t => !t.startsWith('lang:') && !t.startsWith('chapter:') && !(t === 'JEE' && (item.tags || []).includes('Class 10')));
+                  return (
+                    <div
+                      key={item.id}
+                      onClick={() => { if (wasLongPress.current) { wasLongPress.current = false; return; } navigateToKit(item.id, item.type); }}
+                      onPointerDown={() => startLongPress({ id: item.id, title: stripModePrefix(item.title), section: 'saved' })}
+                      onPointerUp={endLongPress}
+                      onPointerLeave={endLongPress}
+                      onPointerCancel={endLongPress}
+                      onContextMenu={e => e.preventDefault()}
+                      className={`${accent.bg} border border-surface-container border-l-4 ${accent.border} rounded-2xl p-6 shadow-sm flex flex-col cursor-pointer hover:-translate-y-1 hover:shadow-lg transition-all group select-none`}
+                    >
+                      <div className="flex items-start justify-between gap-3 mb-3">
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest shrink-0 ${modeBadgeStyle(item.type)}`}>
+                          <ModeIcon type={item.type} />
+                          {modeLabel(item.type)}
+                        </span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-[10px] font-bold text-on-surface-variant/60 uppercase">{item.date}</span>
+                          <button
+                            onClick={e => { e.stopPropagation(); setDeleteConfirm({ id: item.id, title: stripModePrefix(item.title), section: 'saved' }); }}
+                            onPointerDown={e => e.stopPropagation()}
+                            className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-rose-50 text-on-surface-variant/40 hover:text-rose-600 transition-all"
+                            title="Remove this session"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </div>
+
+                      <h3 className="text-base font-bold text-on-surface leading-snug line-clamp-2 mb-2 group-hover:text-primary transition-colors">
+                        {stripModePrefix(item.title)}
+                      </h3>
+
+                      {item.contentSnippet && (
+                        <p className="text-xs text-on-surface-variant leading-relaxed line-clamp-2 mb-3 font-medium">
+                          {item.contentSnippet}
+                        </p>
+                      )}
+
+                      {visibleTags.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mb-4">
+                          {visibleTags.slice(0, 3).map(t => (
+                            <span key={t} className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide ${accent.tagBg}`}>{t}</span>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="mt-auto pt-3 border-t border-black/5 space-y-2">
+                        <div className="flex items-center justify-between text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">
+                          <span>Progress</span>
+                          <span className={`${progress >= 75 ? 'text-emerald-600' : progress >= 40 ? 'text-amber-600' : 'text-on-surface'} font-black`}>{progress}%</span>
+                        </div>
+                        <div className="w-full bg-black/5 h-2 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${progress >= 75 ? 'bg-emerald-500' : progress >= 40 ? 'bg-amber-500' : accent.bar}`}
+                            style={{ width: `${progress}%` }}
+                          />
+                        </div>
                         <button
-                          onClick={e => { e.stopPropagation(); setDeleteConfirm({ id: item.id, title: stripModePrefix(item.title), section: 'saved' }); }}
-                          onPointerDown={e => e.stopPropagation()}
-                          className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-rose-50 text-on-surface-variant/40 hover:text-rose-600 transition-all"
-                          title="Remove this session"
+                          onClick={e => { e.stopPropagation(); navigateToKit(item.id, item.type); }}
+                          className={`w-full py-2.5 ${accent.bar} text-white hover:brightness-110 transition-all rounded-xl text-[11px] font-black uppercase tracking-widest mt-1`}
                         >
-                          <Trash2 size={13} />
+                          Resume Learning
                         </button>
                       </div>
                     </div>
-
-                    <h3 className="text-base font-bold text-on-surface leading-snug line-clamp-2 mb-2 group-hover:text-primary transition-colors">
-                      {stripModePrefix(item.title)}
-                    </h3>
-
-                    {item.contentSnippet && (
-                      <p className="text-xs text-on-surface-variant leading-relaxed line-clamp-2 mb-4 font-medium">
-                        {item.contentSnippet}
-                      </p>
-                    )}
-
-                    {item.tags && item.tags.filter(t => !t.startsWith('lang:') && !t.startsWith('chapter:') && !(t === 'JEE' && item.tags.includes('Class 10'))).length > 0 && (
-                      <div className="flex flex-wrap gap-1 mb-4">
-                        {item.tags.filter(t => !t.startsWith('lang:') && !t.startsWith('chapter:') && !(t === 'JEE' && item.tags.includes('Class 10'))).slice(0, 3).map(t => (
-                          <span key={t} className="px-2 py-0.5 bg-surface-container-low text-[9px] rounded font-bold text-on-surface-variant uppercase">{t}</span>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="mt-auto pt-3 border-t border-surface-container-low space-y-2">
-                      <div className="flex items-center justify-between text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">
-                        <span>Progress</span>
-                        <span className="text-on-surface">{item.progress}%</span>
-                      </div>
-                      <div className="w-full bg-surface-container h-1.5 rounded-full overflow-hidden">
-                        <div
-                          className={`h-full ${item.progress >= 75 ? 'bg-emerald-500' : item.progress >= 40 ? 'bg-amber-500' : 'bg-primary'}`}
-                          style={{ width: `${item.progress}%` }}
-                        />
-                      </div>
-                      <button
-                        onClick={e => { e.stopPropagation(); navigateToKit(item.id, item.type); }}
-                        className="w-full py-2.5 bg-surface-container hover:bg-primary hover:text-white transition-all rounded-xl text-[11px] font-black uppercase tracking-widest mt-1"
-                      >
-                        Resume Learning
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1053,13 +1111,13 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
                         <div className={`h-full ${passed ? 'bg-emerald-500' : 'bg-rose-500'}`} style={{ width: `${pct}%` }} />
                       </div>
 
-                      {attempt.missingKeywords.length > 0 && (
+                      {(attempt.missingKeywords?.length ?? 0) > 0 && (
                         <div className="flex flex-wrap gap-1 mb-3">
-                          {attempt.missingKeywords.slice(0, 3).map((kw, i) => (
+                          {attempt.missingKeywords!.slice(0, 3).map((kw, i) => (
                             <span key={i} className="px-2 py-0.5 bg-rose-50 text-rose-600 rounded text-[9px] font-bold">{kw}</span>
                           ))}
-                          {attempt.missingKeywords.length > 3 && (
-                            <span className="px-2 py-0.5 bg-rose-50 text-rose-600 rounded text-[9px] font-bold">+{attempt.missingKeywords.length - 3}</span>
+                          {attempt.missingKeywords!.length > 3 && (
+                            <span className="px-2 py-0.5 bg-rose-50 text-rose-600 rounded text-[9px] font-bold">+{attempt.missingKeywords!.length - 3}</span>
                           )}
                         </div>
                       )}
@@ -1069,7 +1127,7 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
                       )}
 
                       <div className="mt-auto pt-3 border-t border-surface-container-low">
-                        <p className="text-[10px] text-on-surface-variant font-medium leading-relaxed line-clamp-2 mb-2">{attempt.studentAnswer.substring(0, 120)}{attempt.studentAnswer.length > 120 ? '…' : ''}</p>
+                        <p className="text-[10px] text-on-surface-variant font-medium leading-relaxed line-clamp-2 mb-2">{(attempt.studentAnswer || '').substring(0, 120)}{(attempt.studentAnswer || '').length > 120 ? '…' : ''}</p>
                       </div>
                     </div>
                   );
@@ -1295,7 +1353,7 @@ export const LibraryView = ({ library, stats, setView, navigateToKit, navigateTo
                 </a>
                 <button
                   onClick={() => {
-                    console.warn(`[Klaro] Broken link reported: ${fallbackContext} — ${fallbackPaper.subject} ${fallbackPaper.year} (${fallbackPaper.type})`);
+                    console.warn(`[Lumina] Broken link reported: ${fallbackContext} — ${fallbackPaper.subject} ${fallbackPaper.year} (${fallbackPaper.type})`);
                     setFallbackPaper(null);
                   }}
                   className="w-full py-3 text-amber-700 font-bold text-sm hover:bg-amber-50 rounded-2xl transition-all"

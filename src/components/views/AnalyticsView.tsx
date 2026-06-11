@@ -52,10 +52,12 @@ export const AnalyticsView = ({ library, activeTab: externalActiveTab, setActive
   const setActiveTab = setExternalActiveTab || setInternalActiveTab;
 
   const [quizHistory, setQuizHistory] = useState(() => getQuizHistory());
+  // When a specific currentTopic is provided, only show quiz data for THAT topic.
+  // Don't fall back to quizHistory[0] (a different chapter) — that confuses users.
   const latestAttempt = (() => {
     if (!currentTopic) return quizHistory[0] || null;
     const topicMatch = quizHistory.find(q => q.topic === currentTopic || q.chapterTitle === currentTopic);
-    return topicMatch || quizHistory[0] || null;
+    return topicMatch || null;
   })();
 
   const [weakTopicsData, setWeakTopicsData] = useState<{ notes: string, tips: string, keywords: string[], quiz: QuizData } | null>(null);
@@ -76,6 +78,9 @@ export const AnalyticsView = ({ library, activeTab: externalActiveTab, setActive
     }
   }, [currentTopic, weakTopicsForTopic]);
 
+  // Detect subject from kit or latest quiz attempt
+  const detectedSubject = kit?.subject || kit?.detectedSubject || latestAttempt?.subject || '';
+
   const generateWeakTopicsData = async () => {
     if (!stats) return;
     try {
@@ -89,7 +94,7 @@ export const AnalyticsView = ({ library, activeTab: externalActiveTab, setActive
         : stats.weakTopics;
       const topicsToSend = scopedWeakTopics.length > 0 ? scopedWeakTopics : (scopeTopic ? [scopeTopic] : stats.weakTopics);
       const mistakesToSend = scopedMistakes.length > 0 ? scopedMistakes : [];
-      const data = await aiService.generateWeakTopicAnalysis(topicsToSend, mistakesToSend);
+      const data = await aiService.generateWeakTopicAnalysis(topicsToSend, mistakesToSend, detectedSubject, scopeTopic || undefined);
       setWeakTopicsData(data);
       setWeakTopicsForTopic(currentTopic);
       setSavedAnalysisId(null);
@@ -109,22 +114,28 @@ export const AnalyticsView = ({ library, activeTab: externalActiveTab, setActive
 
   const handleSaveAnalysis = () => {
     if (!onSave || !weakTopicsData) return;
-    
+
     const idToSave = savedAnalysisId || crypto.randomUUID();
     if (!savedAnalysisId) {
       setSavedAnalysisId(idToSave);
     }
-    
-    const topicTitle = stats?.weakTopics?.[0] ? `${stats.weakTopics[0]} Analysis` : 'Weak Topics Analysis';
+
+    // Use the current chapter name for a descriptive title
+    const chapterName = currentTopic || latestAttempt?.chapterTitle || latestAttempt?.topic || '';
+    const topicTitle = chapterName
+      ? `Conceptual Synthesis — ${chapterName}`
+      : stats?.weakTopics?.[0]
+        ? `Conceptual Synthesis — ${stats.weakTopics[0]}`
+        : 'Weak Topics Analysis';
 
     onSave({
       id: idToSave,
       title: topicTitle,
-      type: 'analysis',
+      type: 'weak-topic-analysis',
       date: new Date().toLocaleDateString('en-GB'),
       progress: 0,
       contentSnippet: weakTopicsData.notes.substring(0, 100),
-      tags: weakTopicsData.keywords
+      tags: [...(weakTopicsData.keywords || []), ...(chapterName ? [`chapter:${chapterName}`] : [])],
     }, weakTopicsData);
     alert('Analysis saved to library!');
   };
@@ -609,20 +620,45 @@ export const AnalyticsView = ({ library, activeTab: externalActiveTab, setActive
             {/* Knowledge Map — mastery per topic from quiz data */}
             {(() => {
               const chapterMastery = mastery.find(m => m.topic === latestAttempt.topic);
-              const masteryScore = chapterMastery?.masteryScore ?? latestAttempt.percentage;
               const chapterAttempts = quizHistory.filter(q => q.topic === latestAttempt.topic);
               const totalCorrect = chapterAttempts.reduce((s, q) => s + q.correctCount, 0);
               const totalQs = chapterAttempts.reduce((s, q) => s + q.totalQuestions, 0);
               const overallAccuracy = totalQs > 0 ? Math.round((totalCorrect / totalQs) * 100) : 0;
-              const daysSinceLast = chapterMastery ? Math.max(0, Math.round((Date.now() - new Date(chapterMastery.lastAttemptDate).getTime()) / 86_400_000)) : 0;
-              const retentionScore = daysSinceLast === 0 ? masteryScore : Math.max(20, Math.round(masteryScore * Math.max(0.5, 1 - daysSinceLast / 60)));
+
+              // BKT mastery with Ebbinghaus decay already applied by getMastery()
+              const masteryScore = chapterMastery?.masteryScore ?? Math.round(overallAccuracy * 0.8);
+
+              // Cognitive-level breakdown from actual quiz answers
+              const chapterCognitive = computeCognitiveBreakdown(latestAttempt.topic);
+
+              // Retention = BKT P(L,t) with Ebbinghaus decay (already in masteryScore)
+              const retentionScore = masteryScore;
+
+              // Radar axes — each sourced from real data via Bloom's taxonomy tags:
+              //   Recall = accuracy on 'recall'-tagged questions (Bloom's L1)
+              //   Understanding = accuracy on 'understand'-tagged questions (Bloom's L2)
+              //   Application = accuracy on 'apply'-tagged questions (Bloom's L3)
+              //   Logic = accuracy on 'analyze'-tagged questions (Bloom's L4)
+              //   Retention = BKT P(L,t) with Ebbinghaus decay
+              //   Exam Readiness = weighted composite of all axes
+              // Quiz questions are tagged with cognitiveLevel by the AI during generation.
+              // Falls back to difficulty-based inference for legacy questions without tags.
+              const recallAcc = chapterCognitive.recall.total > 0 ? chapterCognitive.recall.accuracy : overallAccuracy;
+              const understandAcc = chapterCognitive.understand.total > 0 ? chapterCognitive.understand.accuracy : overallAccuracy;
+              const applyAcc = chapterCognitive.apply.total > 0 ? chapterCognitive.apply.accuracy : Math.max(0, overallAccuracy - 10);
+              const analyzeAcc = chapterCognitive.analyze.total > 0 ? chapterCognitive.analyze.accuracy : Math.max(0, overallAccuracy - 15);
+              const examReadiness = Math.round(
+                recallAcc * 0.15 + understandAcc * 0.2 + applyAcc * 0.2 +
+                analyzeAcc * 0.15 + retentionScore * 0.15 + overallAccuracy * 0.15
+              );
+
               const dims = [
-                { label: 'Recall', value: Math.min(100, Math.round(overallAccuracy * 1.1)) },
-                { label: 'Understanding', value: Math.min(100, masteryScore) },
-                { label: 'Application', value: Math.min(100, Math.max(15, masteryScore - 15)) },
-                { label: 'Logic', value: Math.min(100, Math.round((masteryScore + overallAccuracy) / 2)) },
-                { label: 'Retention', value: retentionScore },
-                { label: 'Exam Readiness', value: Math.min(100, Math.round((masteryScore * 0.6 + overallAccuracy * 0.4))) },
+                { label: 'Recall', value: Math.min(100, recallAcc) },
+                { label: 'Understanding', value: Math.min(100, understandAcc) },
+                { label: 'Application', value: Math.min(100, applyAcc) },
+                { label: 'Logic', value: Math.min(100, analyzeAcc) },
+                { label: 'Retention', value: Math.min(100, retentionScore) },
+                { label: 'Exam Readiness', value: Math.min(100, examReadiness) },
               ];
               const cx = 128, cy = 128, maxR = 110;
               const angles = dims.map((_, i) => (Math.PI * 2 * i) / dims.length - Math.PI / 2);
@@ -726,6 +762,36 @@ export const AnalyticsView = ({ library, activeTab: externalActiveTab, setActive
               );
             })()}
           </motion.div>
+        ) : currentTopic ? (
+          /* Topic is known (from recent kit or activity log) but no quiz data exists yet */
+          <motion.div
+            key="no_quiz_for_topic"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="space-y-10 pb-20"
+          >
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-primary font-black text-[10px] uppercase tracking-widest">
+                <BookOpen size={14} /> Recently studied
+              </div>
+              <h2 className="text-4xl font-black text-on-surface tracking-tight">{currentTopic}</h2>
+            </div>
+            <div className="flex flex-col items-center justify-center p-20 bg-white border border-dashed border-surface-container rounded-[40px] text-center">
+              <div className="w-20 h-20 bg-primary/10 rounded-3xl flex items-center justify-center text-primary mb-6">
+                <Target size={40} />
+              </div>
+              <h3 className="text-2xl font-black text-on-surface mb-2">No quiz data yet</h3>
+              <p className="text-on-surface-variant max-w-sm mb-8 font-medium">
+                Take a quiz on <span className="font-bold text-on-surface">"{currentTopic}"</span> to see your Knowledge Map, mastery score, and weak topics for this chapter.
+              </p>
+              <button
+                onClick={() => setView?.('practice')}
+                className="px-8 py-3 bg-primary text-white rounded-xl font-black text-xs uppercase tracking-widest"
+              >
+                Take a Quiz
+              </button>
+            </div>
+          </motion.div>
         ) : (
           <motion.div
             key="empty_analysis"
@@ -737,7 +803,7 @@ export const AnalyticsView = ({ library, activeTab: externalActiveTab, setActive
               <Activity size={40} />
             </div>
             <h3 className="text-2xl font-black text-on-surface mb-2">Awaiting Intelligence</h3>
-            <p className="text-on-surface-variant max-w-sm mb-8 font-medium">Save topics to your library to unlock deep performance analytics and AI-driven insights.</p>
+            <p className="text-on-surface-variant max-w-sm mb-8 font-medium">Generate a revision kit and take a quiz to unlock your Knowledge Map and performance analytics.</p>
           </motion.div>
         )}
       </AnimatePresence>

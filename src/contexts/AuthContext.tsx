@@ -35,7 +35,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType>(null!);
 export const useAuth = () => useContext(AuthContext);
 
-const TOKEN_KEY = 'klaro:auth-token';
+const TOKEN_KEY = 'lumina:auth-token';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -60,8 +60,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const data = await res.json();
       if (data.success) {
         setUser(data.user);
-        // Sync plan to localStorage for billingService
-        try { localStorage.setItem('klaro:plan', data.user.planType); } catch { /* ignore */ }
+        try {
+          localStorage.setItem('lumina:plan', data.user.planType);
+          localStorage.setItem('lumina:user-email', data.user.email);
+        } catch { /* ignore */ }
       }
     } catch { /* silent */ }
   }, [authFetch]);
@@ -76,7 +78,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       .then(data => {
         if (data.success) {
           setUser(data.user);
-          try { localStorage.setItem('klaro:plan', data.user.planType); } catch { /* ignore */ }
+          try {
+            localStorage.setItem('lumina:plan', data.user.planType);
+            localStorage.setItem('lumina:user-email', data.user.email);
+          } catch { /* ignore */ }
           pullFromServer().catch(() => {});
         } else {
           localStorage.removeItem(TOKEN_KEY);
@@ -104,7 +109,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const data = await res.json();
     if (!data.success) throw new Error(data.error);
     localStorage.setItem(TOKEN_KEY, data.token);
-    localStorage.setItem('klaro:plan', data.user.planType);
+    localStorage.setItem('lumina:plan', data.user.planType);
+    localStorage.setItem('lumina:user-email', data.user.email);
     setToken(data.token);
     setUser(data.user);
     pullFromServer().catch(() => {});
@@ -119,7 +125,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const data = await res.json();
     if (!data.success) throw new Error(data.error);
     localStorage.setItem(TOKEN_KEY, data.token);
-    localStorage.setItem('klaro:plan', data.user.planType);
+    localStorage.setItem('lumina:plan', data.user.planType);
+    localStorage.setItem('lumina:user-email', data.user.email);
     setToken(data.token);
     setUser(data.user);
     pullFromServer().catch(() => {});
@@ -127,7 +134,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = () => {
     localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem('klaro:plan');
+    localStorage.removeItem('lumina:plan');
+    localStorage.removeItem('lumina:user-email');
     setToken(null);
     setUser(null);
   };

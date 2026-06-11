@@ -32,7 +32,7 @@ export const FlashcardsView = ({ set, isLoading, error, setView, onRetry }: Flas
   React.useEffect(() => {
     setIdx(0);
     setFlipped(false);
-  }, [set?.topic, set?.cards.length]);
+  }, [set?.topic, set?.cards?.length]);
 
   if (isLoading) {
     return (

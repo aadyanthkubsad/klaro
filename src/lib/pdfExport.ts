@@ -26,7 +26,7 @@ const HUB_LABEL: Record<LearningHub, string> = {
   aural:     'Aural Hub',
 };
 
-const STORAGE_KEY = 'klaro:lastLearningMode';
+const STORAGE_KEY = 'lumina:lastLearningMode';
 
 /** Pro promise: remember the last hub the student used so navigation can resume there. */
 export function setLastLearningMode(mode: LearningHub) {
@@ -60,7 +60,7 @@ export function exportKitToPDF(kit: any, mode: LearningHub): boolean {
   }
 
   const title: string =
-    kit.title || kit.quiz?.title || kit.topic || 'Klaro Study Notes';
+    kit.title || kit.quiz?.title || kit.topic || 'Lumina Study Notes';
   const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
@@ -223,12 +223,12 @@ export function exportKitToPDF(kit: any, mode: LearningHub): boolean {
   pdf.setFontSize(8);
   pdf.setTextColor(150, 150, 150);
   pdf.text(
-    `Klaro Learn — your saved learning mode: ${HUB_LABEL[mode]}`,
+    `Lumina Learn — your saved learning mode: ${HUB_LABEL[mode]}`,
     margin,
     y,
   );
 
-  const safe = title.replace(/[^a-z0-9]+/gi, '_').replace(/^_|_$/g, '') || 'klaro_notes';
-  pdf.save(`Klaro_${safe}_${mode}.pdf`);
+  const safe = title.replace(/[^a-z0-9]+/gi, '_').replace(/^_|_$/g, '') || 'lumina_notes';
+  pdf.save(`Lumina_${safe}_${mode}.pdf`);
   return true;
 }

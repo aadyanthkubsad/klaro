@@ -73,6 +73,7 @@ export const OffersView = ({ setView, planType, changePlan }: OffersViewProps) =
   const { user, authFetch, refreshUser } = useAuth();
   const [cycle, setCycle] = useState<'monthly' | 'yearly'>('yearly');
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
   const counters = getUsageCounters();
   const limits = getLimitsFor(planType);
 
@@ -110,7 +111,11 @@ export const OffersView = ({ setView, planType, changePlan }: OffersViewProps) =
       const data = await res.json();
 
       if (!res.ok) {
-        alert(data.error || 'Could not create order. Please try again.');
+        if (res.status === 503 || (data.error && data.error.includes('not configured'))) {
+          setPaymentError('Razorpay payment keys are not yet configured. Please add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to your .env file and restart the server.');
+        } else {
+          setPaymentError(data.error || 'Could not create order. Please try again.');
+        }
         setCheckoutLoading(null);
         return;
       }
@@ -119,7 +124,7 @@ export const OffersView = ({ setView, planType, changePlan }: OffersViewProps) =
         key: data.key,
         amount: data.order.amount,
         currency: data.order.currency,
-        name: 'Klaro Learn',
+        name: 'Lumina Learn',
         description: PRICING.find(p => p.id === id)?.name || 'Plan Upgrade',
         order_id: data.order.id,
         handler: async (response: any) => {
@@ -138,7 +143,7 @@ export const OffersView = ({ setView, planType, changePlan }: OffersViewProps) =
               await refreshUser();
               setView?.('dashboard');
             } else {
-              alert('Payment verification failed. Contact support if amount was deducted.');
+              setPaymentError('Payment verification failed. Contact support if amount was deducted.');
             }
           } catch {
             alert('Payment verification failed. Contact support if amount was deducted.');
@@ -153,7 +158,7 @@ export const OffersView = ({ setView, planType, changePlan }: OffersViewProps) =
       const rzp = new window.Razorpay(options);
       rzp.open();
     } catch {
-      alert('Network error. Please check your connection and try again.');
+      setPaymentError('Network error. Please check your connection and try again.');
       setCheckoutLoading(null);
     }
   };
@@ -172,6 +177,20 @@ export const OffersView = ({ setView, planType, changePlan }: OffersViewProps) =
           Free gets you started. Plus powers daily revision. Exam Pro is your full exam command centre.
         </p>
       </div>
+
+      {/* Payment error banner */}
+      {paymentError && (
+        <div className="bg-rose-50 border border-rose-200 rounded-2xl p-5 flex items-start gap-3 max-w-2xl mx-auto">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-rose-600 shrink-0 mt-0.5"><path d="M12 9v4m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
+          <div className="flex-1">
+            <p className="text-sm font-bold text-rose-900">Payment setup needed</p>
+            <p className="text-xs text-rose-700 mt-0.5">{paymentError}</p>
+          </div>
+          <button onClick={() => setPaymentError(null)} className="text-rose-400 hover:text-rose-600 shrink-0">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
+          </button>
+        </div>
+      )}
 
       {/* Monthly / Yearly toggle */}
       <div className="flex items-center justify-center">

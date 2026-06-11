@@ -115,6 +115,15 @@ export function cacheInvalidate(key: string): boolean {
   return store.delete(key);
 }
 
+/** Invalidate all cache entries whose key contains the given substring. Returns count removed. */
+export function cacheInvalidateByPrefix(prefix: string): number {
+  let removed = 0;
+  for (const key of store.keys()) {
+    if (key.includes(prefix)) { store.delete(key); removed++; }
+  }
+  return removed;
+}
+
 /** Clear all cached data. */
 export function cacheClear(): void {
   store.clear();

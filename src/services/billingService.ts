@@ -21,12 +21,12 @@ import { schedulePush } from './syncService';
 // ─── storage keys ───────────────────────────────────────────────────────────
 
 const KEYS = {
-  plan: 'klaro:plan',
+  plan: 'lumina:plan',
   legacyPremium: 'varkify:isPremium',
-  usage: 'klaro:usage',
+  usage: 'lumina:usage',
 };
 
-const CHANGE_EVENT = 'klaro:billing-change';
+const CHANGE_EVENT = 'lumina:billing-change';
 
 /**
  * DEV-only flag. While true, forces every user into "pro" so the full
@@ -52,12 +52,12 @@ export const PRICING: PricingTier[] = [
   {
     id: 'free',
     name: 'Free',
-    tagline: 'Try Klaro and build a study habit',
+    tagline: 'Try Lumina and build a study habit',
     monthlyPrice: 0,
     yearlyPrice: 0,
     features: [
-      '3 revision kits per day',
-      '3 quizzes per day',
+      '7 revision kits per day',
+      '7 quizzes per day',
       'Basic flashcards',
       'Mistakes notebook',
       'Daily tasks',
@@ -105,9 +105,40 @@ export const PRICING: PricingTier[] = [
 
 // ─── plan persistence ───────────────────────────────────────────────────────
 
+const OWNER_EMAILS = ['prashanth.kubsad@gmail.com', 'kubsadaadyanth@gmail.com'];
+
+export function isOwner(): boolean {
+  try {
+    // Primary: check the email AuthContext stores on login/register/me
+    const email = window.localStorage.getItem('lumina:user-email');
+    if (email && OWNER_EMAILS.includes(email)) return true;
+  } catch { /* ignore */ }
+  try {
+    // Fallback: decode JWT payload (handles URL-safe base64) and self-heal
+    const token = window.localStorage.getItem('lumina:auth-token');
+    if (token) {
+      const parts = token.split('.');
+      if (parts.length === 3) {
+        const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const payload = JSON.parse(atob(b64));
+        if (payload.email) {
+          window.localStorage.setItem('lumina:user-email', payload.email);
+        }
+        if (OWNER_EMAILS.includes(payload.email)) return true;
+      }
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
 export function getPlan(): PlanType {
-  if (DEV_FORCE_PRO) {
-    try { window.localStorage.setItem(KEYS.plan, 'pro'); } catch { /* ignore */ }
+  if (DEV_FORCE_PRO || isOwner()) {
+    try {
+      window.localStorage.setItem(KEYS.plan, 'pro');
+      // Reset stale usage counters for owner so they never hit limits
+      const counters = getDefaultCounters();
+      window.localStorage.setItem(KEYS.usage, JSON.stringify(counters));
+    } catch { /* ignore */ }
     return 'pro';
   }
   try {
@@ -209,9 +240,9 @@ export function getLimitsFor(plan: PlanType): PlanLimits {
     case 'free':
     default:
       return {
-        dailyKitsLimit: 3,
-        dailyQuizLimit: 3,
-        dailyFlashcardSetsLimit: 3,
+        dailyKitsLimit: 7,
+        dailyQuizLimit: 7,
+        dailyFlashcardSetsLimit: 7,
         dailyPdfDownloadsLimit: 0,
         dailyWrittenAnswersLimit: 0,
         monthlyYoutubeRecallLimit: 0,

@@ -89,14 +89,22 @@ export const AuralHub = ({
   setView, onSave, kit, stats, planType = 'free',
   saveMistake, openFlashcards, onPaywall,
 }: AuralHubProps) => {
+  // ── No kit loaded guard ────────────────────────────────────────────────
+  if (!kit) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-6">
+        <div className="w-16 h-16 rounded-2xl bg-indigo-100 flex items-center justify-center mb-4">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-600"><path d="M12 9v4m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
+        </div>
+        <h3 className="text-lg font-bold text-on-surface mb-2">No content loaded</h3>
+        <p className="text-sm text-on-surface-variant max-w-sm mb-6">Please select a chapter from the Library first. Audio content will be generated for the selected chapter.</p>
+        <button onClick={() => setView('library')} className="px-6 py-3 bg-primary text-white rounded-xl font-bold text-sm hover:brightness-110">Go to Library</button>
+      </div>
+    );
+  }
+
   // ── Data extraction ────────────────────────────────────────────────────
-  const data = kit || {
-    summary: { text: '', executiveSummary: '', keyPoints: [], keyVocabulary: [] },
-    quiz: { title: 'Topic Overview', questions: [] },
-    flashcards: { cards: [] },
-    aural: { audioScript: '', lectureNotes: '' },
-    readWrite: { tips: [], synthesisPrompt: '' },
-  };
+  const data = kit;
 
   const auralData = data.aural || { audioScript: '', lectureNotes: '' };
   const topicTitle = data.quiz?.title || data.title || data.topic || 'Topic';
@@ -362,7 +370,7 @@ export const AuralHub = ({
             {topicTitle}
           </h2>
           <p className="text-on-surface-variant text-sm mt-1">
-            Audio learning workspace {'·'} {subject} {'·'} {data.classLevel || 'Class 10'}
+            Audio learning workspace {'·'} {subject} {'·'} {data.classLevel || 'Class 10'}{data.stream ? ` · ${data.stream}` : ''}
           </p>
         </div>
 
@@ -768,7 +776,7 @@ export const AuralHub = ({
           )}
         </div>
 
-        {/* ── Right column: Tips → Vocabulary Carousel → Quick Actions → Plan ── */}
+        {/* ── Right column: Tips → Vocabulary Carousel → Formula Sheet → Plan ── */}
         <div className="lg:col-span-4 space-y-6">
           {/* 1. Tips & Suggestions (AIGuide) */}
           <AIGuide topic={topicTitle} customTips={data.readWrite?.tips} />
@@ -844,46 +852,57 @@ export const AuralHub = ({
             );
           })()}
 
-          {/* 3. Quick Actions */}
-          <div className="bg-white border border-surface-container-high rounded-2xl p-6 card-shadow space-y-4">
-            <h4 className="text-xs font-bold text-on-surface-variant uppercase tracking-widest">Quick Actions</h4>
-
-            <button
-              onClick={() => setView('practice')}
-              className="w-full flex items-center gap-3 p-3 rounded-lg bg-indigo-50 border border-indigo-100 hover:bg-indigo-100 transition-colors text-left"
-            >
-              <ClipboardCheck size={18} className="text-indigo-600 shrink-0" />
-              <div>
-                <p className="text-sm font-bold text-on-surface">Take Hub Quiz</p>
-                <p className="text-[10px] text-on-surface-variant">Test what you just heard</p>
-              </div>
-            </button>
-
-            <button
-              onClick={() => openFlashcards?.(topicTitle, kit?.id)}
-              className="w-full flex items-center gap-3 p-3 rounded-lg bg-purple-50 border border-purple-100 hover:bg-purple-100 transition-colors text-left"
-            >
-              <Sparkles size={18} className="text-purple-600 shrink-0" />
-              <div>
-                <p className="text-sm font-bold text-on-surface">Key Term Flashcards</p>
-                <p className="text-[10px] text-on-surface-variant">Review vocabulary from this chapter</p>
-              </div>
-            </button>
-
-            {isPro && hasAudio && (
-              <a
-                href={audioState?.audioUrl || '#'}
-                download={`${topicTitle.replace(/\s+/g, '-').toLowerCase()}-narration.wav`}
-                className="w-full flex items-center gap-3 p-3 rounded-lg bg-amber-50 border border-amber-100 hover:bg-amber-100 transition-colors text-left"
-              >
-                <Download size={18} className="text-amber-600 shrink-0" />
-                <div>
-                  <p className="text-sm font-bold text-on-surface">Download Audio</p>
-                  <p className="text-[10px] text-on-surface-variant">Save MP3 for offline listening</p>
+          {/* 3. Formula Sheet / Quick Reference */}
+          {(() => {
+            const formulas = data.formulaTable || [];
+            const defs = Array.isArray(data.definitions) ? data.definitions : (data.summary?.definitions || []);
+            if (formulas.length === 0 && defs.length === 0) return null;
+            return (
+              <div className="bg-white border border-surface-container-high rounded-2xl p-5 card-shadow">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="p-1.5 bg-emerald-50 rounded-lg text-emerald-600">
+                    <Lightbulb size={16} />
+                  </div>
+                  <h3 className="text-sm font-black text-on-surface">
+                    {formulas.length > 0 ? 'Formula Sheet' : 'Quick Reference'}
+                  </h3>
                 </div>
-              </a>
-            )}
-          </div>
+                <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                  {formulas.length > 0 ? (
+                    formulas.map((row: any, i: number) => (
+                      <div key={i} className="p-2.5 bg-emerald-50 rounded-lg border border-emerald-100">
+                        <p className="text-xs font-bold text-emerald-800">{row.name}</p>
+                        <p className="text-[11px] text-emerald-700 font-mono font-semibold mt-0.5">{row.formula}</p>
+                        {row.notes && <p className="text-[10px] text-emerald-600 mt-0.5">{row.notes}</p>}
+                      </div>
+                    ))
+                  ) : (
+                    defs.slice(0, 8).map((d: any, i: number) => (
+                      <div key={i} className="p-2.5 bg-blue-50 rounded-lg border border-blue-100">
+                        <p className="text-xs font-bold text-blue-800">{d.word || d.term || 'Term'}</p>
+                        <p className="text-[10px] text-blue-700 mt-0.5">{d.definition || d.meaning || d.def || ''}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Download Audio (shown separately if available) */}
+          {isPro && hasAudio && (
+            <a
+              href={audioState?.audioUrl || '#'}
+              download={`${topicTitle.replace(/\s+/g, '-').toLowerCase()}-narration.wav`}
+              className="flex items-center gap-3 p-4 rounded-2xl bg-amber-50 border border-amber-200 hover:bg-amber-100 transition-colors text-left card-shadow"
+            >
+              <Download size={18} className="text-amber-600 shrink-0" />
+              <div>
+                <p className="text-sm font-bold text-on-surface">Download Audio</p>
+                <p className="text-[10px] text-on-surface-variant">Save for offline listening</p>
+              </div>
+            </a>
+          )}
 
           {/* 4. Plan badge */}
           <div className={`p-4 rounded-xl border text-center ${

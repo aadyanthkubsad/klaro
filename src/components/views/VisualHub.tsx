@@ -22,6 +22,92 @@ interface VisualHubProps {
   isPro?: boolean;
 }
 
+// ─── Formula Carousel for Visual Hub ─────────────────────────────────────────
+
+const VIS_FORMULAS_PER_PAGE = 4;
+
+const VisualFormulaCarousel: React.FC<{ formulas: any[] }> = ({ formulas }) => {
+  const [fPage, setFPage] = useState(0);
+  const totalPages = Math.ceil(formulas.length / VIS_FORMULAS_PER_PAGE);
+  const start = fPage * VIS_FORMULAS_PER_PAGE;
+  const visible = formulas.slice(start, start + VIS_FORMULAS_PER_PAGE);
+
+  return (
+    <div className="bg-white border-2 border-surface-container-high rounded-3xl overflow-hidden">
+      <div className="px-6 md:px-10 py-6 flex items-center gap-3">
+        <div className="p-2.5 bg-emerald-500 text-white rounded-xl">
+          <Layers size={20} />
+        </div>
+        <div>
+          <h3 className="text-xl font-black text-on-surface">Formula Revision</h3>
+          <p className="text-xs text-on-surface-variant font-medium">Quick-scan formulas and key facts</p>
+        </div>
+        <span className="ml-auto px-2.5 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-xs font-black">{formulas.length} formulas</span>
+      </div>
+
+      <div className="relative">
+        <button
+          onClick={() => totalPages > 1 && setFPage(p => (p - 1 + totalPages) % totalPages)}
+          className={`absolute left-2 top-1/2 -translate-y-1/2 z-10 w-9 h-9 rounded-full flex items-center justify-center shadow-lg transition-all ${totalPages > 1 ? 'bg-emerald-600 text-white hover:bg-emerald-700 cursor-pointer' : 'bg-emerald-200 text-emerald-400 cursor-default'}`}
+        >
+          <ChevronLeft size={18} />
+        </button>
+        <button
+          onClick={() => totalPages > 1 && setFPage(p => (p + 1) % totalPages)}
+          className={`absolute right-2 top-1/2 -translate-y-1/2 z-10 w-9 h-9 rounded-full flex items-center justify-center shadow-lg transition-all ${totalPages > 1 ? 'bg-emerald-600 text-white hover:bg-emerald-700 cursor-pointer' : 'bg-emerald-200 text-emerald-400 cursor-default'}`}
+        >
+          <ChevronRight size={18} />
+        </button>
+
+        <div className="px-12 md:px-16 pb-4">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={fPage}
+              initial={{ opacity: 0, x: 60 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -60 }}
+              transition={{ duration: 0.25 }}
+              className="overflow-x-auto"
+            >
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-emerald-50 border-b-2 border-emerald-200">
+                    <th className="px-4 py-3 text-left text-[10px] font-black uppercase tracking-wider text-emerald-700">Name</th>
+                    <th className="px-4 py-3 text-left text-[10px] font-black uppercase tracking-wider text-emerald-700">Formula / Rule</th>
+                    <th className="px-4 py-3 text-left text-[10px] font-black uppercase tracking-wider text-emerald-700">Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map((row: any, i: number) => (
+                    <tr key={i} className={`border-b border-surface-container-high ${i % 2 === 0 ? 'bg-white' : 'bg-emerald-50/30'}`}>
+                      <td className="px-4 py-3 text-xs font-bold text-on-surface whitespace-nowrap">{row.name}</td>
+                      <td className="px-4 py-3 text-xs text-on-surface font-mono font-semibold">{row.formula}</td>
+                      <td className="px-4 py-3 text-xs text-on-surface-variant leading-relaxed">{row.notes}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </motion.div>
+          </AnimatePresence>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-center gap-2 pb-4 border-t border-surface-container-high pt-3 mx-6 md:mx-10">
+        <div className="flex gap-1.5 items-center">
+          {Array.from({ length: totalPages }).map((_, i) => (
+            <button
+              key={i}
+              onClick={() => setFPage(i)}
+              className={`w-2.5 h-2.5 rounded-full transition-all ${i === fPage ? 'bg-emerald-500 scale-110' : 'bg-emerald-200 hover:bg-emerald-300'}`}
+            />
+          ))}
+        </div>
+        <span className="text-[10px] text-emerald-600 font-bold ml-2">{fPage + 1} / {totalPages}</span>
+      </div>
+    </div>
+  );
+};
+
 // ─── Color palette for mind map branches ───────────────────────────────────
 const BRANCH_STYLES = [
   { bg: 'bg-blue-50',   border: 'border-blue-200',   text: 'text-blue-700',   accent: 'bg-blue-500',   titleColor: 'text-blue-600',   line: '#3b82f6',  dot: 'bg-blue-400' },
@@ -60,21 +146,27 @@ function computeConnectorPaths(totalBranches: number): [number, number, number, 
 export const VisualHub = ({ setView, onSave, kit, stats, saveMistake, openFlashcards, openPremium3D, isPro }: VisualHubProps) => {
   const [expandedBranch, setExpandedBranch] = useState<number | null>(null);
   const [carouselSlide, setCarouselSlide] = useState(0);
+  const [summaryCardIdx, setSummaryCardIdx] = useState(0);
 
   const TOTAL_SLIDES = 2; // 0 = Mind Map, 1 = Flowchart
 
   const nextSlide = useCallback(() => setCarouselSlide(s => (s + 1) % TOTAL_SLIDES), []);
   const prevSlide = useCallback(() => setCarouselSlide(s => (s - 1 + TOTAL_SLIDES) % TOTAL_SLIDES), []);
 
-  const data = kit || {
-    summary: { text: "No content generated yet.", keyPoints: [], keyVocabulary: [] },
-    quiz: { title: "Visual & Interactive Hub", questions: [] },
-    visual: { graphicDescription: "", conceptMap: [] },
-    mindMap: [],
-    definitions: [],
-    keyPoints: [],
-    commonMistakes: [],
-  };
+  if (!kit) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-6">
+        <div className="w-16 h-16 rounded-2xl bg-amber-100 flex items-center justify-center mb-4">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-amber-600"><path d="M12 9v4m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
+        </div>
+        <h3 className="text-lg font-bold text-on-surface mb-2">No content loaded</h3>
+        <p className="text-sm text-on-surface-variant max-w-sm mb-6">Please select a chapter from the Library first. Visual content will be generated for the selected chapter.</p>
+        <button onClick={() => setView('library')} className="px-6 py-3 bg-primary text-white rounded-xl font-bold text-sm hover:brightness-110">Go to Library</button>
+      </div>
+    );
+  }
+
+  const data = kit;
 
   const visualData = data.visual || { graphicDescription: "", conceptMap: [] };
   const topicTitle = data.quiz?.title || data.title || 'the topic';
@@ -83,6 +175,7 @@ export const VisualHub = ({ setView, onSave, kit, stats, saveMistake, openFlashc
   const definitions = typeof data.summary === 'string' ? (data.definitions || []) : (data.summary?.keyVocabulary || data.definitions || []);
   const commonMistakes = data.commonMistakes || [];
   const tips = data.readWrite?.tips || [];
+  const formulaTable = data.formulaTable || [];
 
   // ── Build structured mind map from kit data ──────────────────────────────
   const mindMapBranches = useMemo(() => {
@@ -421,7 +514,7 @@ export const VisualHub = ({ setView, onSave, kit, stats, saveMistake, openFlashc
                             initial={{ opacity: 0, x: -20 }}
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: i * 0.08 }}
-                            className={`w-full max-w-lg p-4 rounded-xl border-2 transition-all ${
+                            className={`w-full max-w-lg p-4 rounded-xl border-2 transition-all hover:shadow-lg ${
                               i === 0
                                 ? 'bg-teal-50 border-teal-300 shadow-md'
                                 : i === flowchartSteps.length - 1
@@ -430,12 +523,12 @@ export const VisualHub = ({ setView, onSave, kit, stats, saveMistake, openFlashc
                             }`}
                           >
                             <div className="flex items-start gap-3">
-                              <span className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-black text-white ${
+                              <span className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-black text-white shadow-sm ${
                                 i === 0 ? 'bg-teal-500' : i === flowchartSteps.length - 1 ? 'bg-green-500' : 'bg-slate-400'
                               }`}>
                                 {i + 1}
                               </span>
-                              <p className="text-sm text-on-surface font-medium leading-relaxed flex-1">{step}</p>
+                              <p className="text-sm text-on-surface font-semibold leading-relaxed flex-1">{step}</p>
                             </div>
                           </motion.div>
                           {i < flowchartSteps.length - 1 && (
@@ -466,43 +559,9 @@ export const VisualHub = ({ setView, onSave, kit, stats, saveMistake, openFlashc
             </div>
           </div>
 
-          {/* ── Visual Summary Cards (below carousel) ──────────────────── */}
-          {summaryCards.length > 0 && (
-            <div className="bg-white border-2 border-surface-container-high rounded-3xl p-8 md:p-10">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="p-2.5 bg-violet-500 text-white rounded-xl">
-                  <Layers size={20} />
-                </div>
-                <div>
-                  <h3 className="text-xl font-black text-on-surface">Visual Summary Cards</h3>
-                  <p className="text-xs text-on-surface-variant font-medium">Key concepts at a glance</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {summaryCards.map((card, i) => {
-                  const style = BRANCH_STYLES[i % BRANCH_STYLES.length];
-                  return (
-                    <motion.div
-                      key={i}
-                      initial={{ opacity: 0, scale: 0.95 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      transition={{ delay: i * 0.06 }}
-                      className={`rounded-2xl border-2 ${style.border} ${style.bg} p-4 hover:shadow-md transition-all`}
-                    >
-                      <h4 className={`text-sm font-black ${style.text} mb-2`}>{card.title}</h4>
-                      <p className="text-xs text-on-surface leading-relaxed mb-2">{card.meaning}</p>
-                      {card.examTip && (
-                        <p className="text-[10px] text-amber-600 font-medium mt-auto pt-2 border-t border-amber-100">
-                          <Lightbulb size={10} className="inline mr-1 -mt-0.5" />
-                          {card.examTip}
-                        </p>
-                      )}
-                    </motion.div>
-                  );
-                })}
-              </div>
-            </div>
+          {/* ── Formula Revision Carousel ───────────────────────────────── */}
+          {formulaTable.length > 0 && (
+            <VisualFormulaCarousel formulas={formulaTable} />
           )}
 
           {/* ── English Gloss Panel ─────────────────────────────────────── */}
@@ -534,6 +593,70 @@ export const VisualHub = ({ setView, onSave, kit, stats, saveMistake, openFlashc
               </p>
             </div>
           </div>
+
+          {/* ── Visual Summary Cards — Carousel ────────────────────── */}
+          {summaryCards.length > 0 && (() => {
+            const safeIdx = Math.min(summaryCardIdx, summaryCards.length - 1);
+            const card = summaryCards[safeIdx];
+            const style = BRANCH_STYLES[safeIdx % BRANCH_STYLES.length];
+            return (
+              <div className="bg-white border border-surface-container rounded-[32px] p-5 card-shadow">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 bg-violet-50 rounded-lg text-violet-600">
+                      <Layers size={16} />
+                    </div>
+                    <h3 className="text-sm font-black text-on-surface">Visual Summary Cards</h3>
+                  </div>
+                  <span className="text-[10px] font-bold text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full">
+                    {safeIdx + 1} / {summaryCards.length}
+                  </span>
+                </div>
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={safeIdx}
+                    initial={{ opacity: 0, x: 30 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -30 }}
+                    transition={{ duration: 0.2 }}
+                    className={`rounded-xl border-2 ${style.border} ${style.bg} p-4 min-h-[100px]`}
+                  >
+                    <h4 className={`text-sm font-black ${style.text} mb-2`}>{card.title}</h4>
+                    <p className="text-xs text-on-surface leading-relaxed mb-2">{card.meaning}</p>
+                    {card.examTip && (
+                      <p className="text-[10px] text-amber-600 font-medium mt-auto pt-2 border-t border-amber-100">
+                        <Lightbulb size={10} className="inline mr-1 -mt-0.5" />
+                        {card.examTip}
+                      </p>
+                    )}
+                  </motion.div>
+                </AnimatePresence>
+                <div className="flex items-center justify-between mt-3">
+                  <button
+                    onClick={() => setSummaryCardIdx(safeIdx <= 0 ? summaryCards.length - 1 : safeIdx - 1)}
+                    className="w-9 h-9 rounded-full border border-violet-200 bg-violet-50 text-violet-600 flex items-center justify-center hover:bg-violet-100 transition-colors"
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+                  <div className="flex gap-1.5">
+                    {summaryCards.map((_: any, i: number) => (
+                      <button
+                        key={i}
+                        onClick={() => setSummaryCardIdx(i)}
+                        className={`w-2 h-2 rounded-full transition-all ${i === safeIdx ? 'bg-violet-500 scale-125' : 'bg-violet-200 hover:bg-violet-300'}`}
+                      />
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => setSummaryCardIdx(safeIdx >= summaryCards.length - 1 ? 0 : safeIdx + 1)}
+                    className="w-9 h-9 rounded-full border border-violet-200 bg-violet-50 text-violet-600 flex items-center justify-center hover:bg-violet-100 transition-colors"
+                  >
+                    <ChevronRight size={18} />
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
     </motion.div>

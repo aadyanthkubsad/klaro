@@ -124,7 +124,7 @@ export const Dashboard = ({ setView, generateKit, navigateToKit, library, stats,
             onClick={() => setView('doubt-solver')}
             className="w-full py-4 bg-surface-container text-on-surface font-black text-xs uppercase tracking-widest rounded-2xl hover:bg-primary hover:text-white transition-all mt-8"
           >
-            Ask Klaro AI
+            Ask Lumina AI
           </button>
         </div>
       </section>

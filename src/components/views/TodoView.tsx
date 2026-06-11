@@ -128,8 +128,8 @@ export const TodoView = ({ setView, openFlashcards, openMistakesForTopic, openMo
       showPaywall({
         title: isPro ? 'Unlock advanced mastery tracking' : 'Unlock spaced revision reminders',
         description: isPro
-          ? 'Klaro can estimate what you know, what you are forgetting, and when to revise next.'
-          : 'Klaro plans your revisions at Day 3, 7, 14, and 30 to flatten the forgetting curve.',
+          ? 'Lumina can estimate what you know, what you are forgetting, and when to revise next.'
+          : 'Lumina plans your revisions at Day 3, 7, 14, and 30 to flatten the forgetting curve.',
         ctaLabel: isPro ? 'Upgrade to Pro' : 'Upgrade to Plus',
         requiredPlan: isPro ? 'pro' : 'plus',
         benefits: isPro
@@ -306,7 +306,7 @@ export const TodoView = ({ setView, openFlashcards, openMistakesForTopic, openMo
               <p className="text-sm text-on-surface-variant font-medium mb-4 max-w-sm mx-auto">
                 {tab === 'completed'
                   ? 'Complete tasks from the Today tab to see them here.'
-                  : 'Complete a hub quiz and Klaro will create a revision plan based on what you missed.'}
+                  : 'Complete a hub quiz and Lumina will create a revision plan based on what you missed.'}
               </p>
               {tab !== 'completed' && (
                 <button onClick={() => setView('dashboard')} className="px-6 py-2.5 bg-primary text-white rounded-xl font-black text-xs uppercase tracking-widest">

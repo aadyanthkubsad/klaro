@@ -116,6 +116,16 @@ export interface ComprehensiveKit {
   readWrite: DetailedReadWrite;
 }
 
+/** Build auth headers so the server can identify the logged-in user. */
+function authHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  try {
+    const token = window.localStorage.getItem('lumina:auth-token');
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+  } catch { /* SSR / no localStorage */ }
+  return headers;
+}
+
 /**
  * Service to handle AI operations using Google Gemini API via backend.
  * Every method is a thin POST to a /api/... endpoint — no SDK, no key.
@@ -142,15 +152,31 @@ export const aiService = {
     chapterId?: string;
     /** Academic year for syllabus-aware generation. */
     academicYear?: string;
+    /** Stream (Science/Commerce) for Class 11/12. */
+    stream?: string;
   }): Promise<ComprehensiveKit> {
-    const response = await fetch('/api/generate-kit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params)
-    });
-    const result = await response.json();
-    if (!result.success) throw new Error(result.error);
-    return result.data as ComprehensiveKit;
+    // Frontend abort after 170s — slightly longer than the server's 180s queue
+    // timeout so we prefer the server's classified error over a raw AbortError.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 170_000);
+    try {
+      const response = await fetch('/api/generate-kit', {
+        method: 'POST',
+        headers: authHeaders(),
+        signal: controller.signal,
+        body: JSON.stringify(params)
+      });
+      const result = await response.json();
+      if (!result.success) throw new Error(result.error);
+      return result.data as ComprehensiveKit;
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        throw new Error('AI generation took too long. The AI service may be busy — please try again.');
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   },
 
   // Removed legacy general helpers
@@ -161,7 +187,7 @@ export const aiService = {
   async generateSummary(text: string): Promise<SummaryData> {
     const response = await fetch('/api/ai/generate-summary', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ text })
     });
     const result = await response.json();
@@ -174,11 +200,11 @@ export const aiService = {
   /**
    * Generates a focused review quiz based on weak topics and past mistakes
    */
-  async generateWeakTopicAnalysis(weakTopics: string[], mistakes: any[]): Promise<{ notes: string, tips: string, keywords: string[], quiz: QuizData }> {
+  async generateWeakTopicAnalysis(weakTopics: string[], mistakes: any[], subject?: string, chapterTitle?: string): Promise<{ notes: string, tips: string, keywords: string[], quiz: QuizData }> {
     const response = await fetch('/api/ai/generate-weak-topic-analysis', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ weakTopics, mistakes })
+      headers: authHeaders(),
+      body: JSON.stringify({ weakTopics, mistakes, subject, chapterTitle })
     });
     const result = await response.json();
     if (!result.success) throw new Error(result.error);
@@ -188,7 +214,7 @@ export const aiService = {
   async generateFocusedReview(weakTopics: string[], mistakes: any[]): Promise<QuizData> {
     const response = await fetch('/api/ai/generate-focused-review', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ weakTopics, mistakes })
     });
     const result = await response.json();
@@ -207,10 +233,11 @@ export const aiService = {
     sourceText?: string;
     weakTopics?: string[];
     count?: number;
+    subject?: string;
   }): Promise<{ topic: string; questions: QuizQuestion[] }> {
     const response = await fetch('/api/generate-quiz', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify(params),
     });
     const result = await response.json();
@@ -231,7 +258,7 @@ export const aiService = {
   }): Promise<{ topic: string; questions: QuizQuestion[] }> {
     const response = await fetch('/api/generate-quiz', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         topic: params.title,
         sourceText: params.transcript || '',
@@ -262,7 +289,7 @@ export const aiService = {
   }): Promise<any> {
     const response = await fetch('/api/generate-study-notes', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify(params),
     });
     if (!response.ok) {
@@ -288,7 +315,7 @@ export const aiService = {
     const topic = `${params.subject} — Practice based on CBSE ${params.year} ${params.paperType.replace('-', ' ')} pattern`;
     const response = await fetch('/api/generate-quiz', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         topic,
         classLevel: params.classLevel || 'Class 10',
@@ -323,7 +350,7 @@ export const aiService = {
   }> {
     const response = await fetch('/api/evaluate-exam-answer', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify(params),
     });
     if (!response.ok) {
@@ -357,7 +384,7 @@ export const aiService = {
   }> {
     const response = await fetch('/api/extract-handwritten-answer', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify(params),
     });
     if (!response.ok) {
@@ -394,7 +421,7 @@ export const aiService = {
   }> {
     const response = await fetch('/api/evaluate-answer', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify(params),
     });
     if (!response.ok) {
@@ -438,7 +465,7 @@ export const aiService = {
   }> {
     const response = await fetch('/api/generate-audio', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify(params),
     });
     if (!response.ok) {
@@ -486,7 +513,7 @@ export const aiService = {
   }): Promise<YouTubeRecallKit> {
     const response = await fetch('/api/youtube-recall', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify(params),
     });
     const result = await response.json();
@@ -506,7 +533,7 @@ export const aiService = {
   }): Promise<{ topic: string; flashcards: Flashcard[] }> {
     const response = await fetch('/api/generate-flashcards', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify(params),
     });
     const result = await response.json();

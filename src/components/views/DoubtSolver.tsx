@@ -10,7 +10,7 @@ import { aiService } from '../../services/aiService';
 
 export const DoubtSolver = () => {
   const [messages, setMessages] = useState([
-    { role: 'assistant', text: "Hello! I'm Klaro, your AI study coach. I've analyzed your learning style and recent progress. How can I help you master your current topics today?" }
+    { role: 'assistant', text: "Hello! I'm Lumina, your AI study coach. I've analyzed your learning style and recent progress. How can I help you master your current topics today?" }
   ]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -24,7 +24,7 @@ export const DoubtSolver = () => {
     setIsTyping(true);
 
     try {
-      const response = await aiService.generateSummary(`User is asking a doubt: "${input}". Please respond as Klaro, an encouraging AI study coach. History: ${JSON.stringify(messages)}`);
+      const response = await aiService.generateSummary(`User is asking a doubt: "${input}". Please respond as Lumina, an encouraging AI study coach. History: ${JSON.stringify(messages)}`);
       
       setMessages(prev => [...prev, { role: 'assistant', text: response.summary }]);
     } catch (err: any) {
@@ -48,7 +48,7 @@ export const DoubtSolver = () => {
             <Sparkles size={32} className="text-white" />
           </div>
           <div>
-            <h2 className="text-3xl font-black text-indigo-950 tracking-tight">Klaro Chat</h2>
+            <h2 className="text-3xl font-black text-indigo-950 tracking-tight">Lumina Chat</h2>
             <p className="text-[10px] font-black text-indigo-600 uppercase tracking-[0.3em] mt-1">AI Personality Guide</p>
           </div>
         </div>
@@ -90,7 +90,7 @@ export const DoubtSolver = () => {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && send()}
-              placeholder="Ask Klaro about your personality, weaknesses, or next steps..."
+              placeholder="Ask Lumina about your personality, weaknesses, or next steps..."
               className="flex-1 pl-6 py-4 bg-transparent border-none text-indigo-950 placeholder:text-on-surface-variant/40 font-medium focus:outline-none text-base"
             />
             <button onClick={send} className="w-14 h-14 bg-indigo-600 text-white rounded-[16px] flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all">

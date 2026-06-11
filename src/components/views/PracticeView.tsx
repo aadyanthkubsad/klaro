@@ -117,7 +117,7 @@ export const PracticeView = ({
   const [lastAttemptId, setLastAttemptId] = useState<string | null>(null);
   const [mistakeSlide, setMistakeSlide] = useState(0);
 
-  const MIN_QUESTIONS = 10;
+  const MIN_QUESTIONS = 25;
   const restoredRef = React.useRef(false);
 
   // Restore saved results on remount (e.g. navigating back from Review Mistakes)
@@ -173,11 +173,12 @@ export const PracticeView = ({
 
       const result = await aiService.generateQuiz({
         topic:      topicName,
-        classLevel: 'Class 10',
+        classLevel: kit?.classLevel || 'Class 10',
         examMode:   'CBSE',
         sourceText,
         weakTopics: stats.weakTopics || [],
-        count:      10,
+        count:      25,
+        subject:    kit?.subject || kit?.detectedSubject || '',
       });
 
       if (!result.questions?.length) throw new Error('No questions returned. Please try again.');
@@ -244,6 +245,8 @@ export const PracticeView = ({
               isCorrect: rec.correct,
               explanation: rec.q.explanation || '',
               topicTag: rec.q.topicTag || topic,
+              cognitiveLevel: (rec.q as any).cognitiveLevel,
+              difficulty: rec.q.difficulty,
             })),
           });
           attemptId = attempt.id;

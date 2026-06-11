@@ -42,46 +42,85 @@ const MODE_META: Record<ChapterMode, {
   category: string;
   desc: string;
   icon: React.ComponentType<any>;
-  accent: string;
-  iconBg: string;
-  iconColor: string;
+  hex: string;
 }> = {
   visual: {
     label: 'Visual',
     category: 'See it',
     desc: 'Mind map, flowchart, diagrams, visual summary cards & flashcards.',
     icon: Eye,
-    accent: 'border-l-amber-500 bg-amber-50',
-    iconBg: 'bg-amber-100',
-    iconColor: 'text-amber-600',
+    hex: '#FACC15',
   },
   readwrite: {
     label: 'Read / Write',
     category: 'Read it',
     desc: 'Summary, key points, definitions, short-answer questions & flashcards.',
     icon: FileText,
-    accent: 'border-l-teal-500 bg-teal-50',
-    iconBg: 'bg-teal-100',
-    iconColor: 'text-teal-600',
+    hex: '#2DE2C8',
   },
   audio: {
     label: 'Aural',
     category: 'Hear it',
     desc: 'Audio-style explanation, lecture notes, key vocabulary & a hub quiz.',
     icon: Headphones,
-    accent: 'border-l-indigo-500 bg-indigo-50',
-    iconBg: 'bg-indigo-100',
-    iconColor: 'text-indigo-600',
+    hex: '#C4B5FD',
   },
   practice: {
     label: 'Practice Quiz',
     category: 'Test it',
     desc: 'CBSE-style MCQs, score tracking, mistake notebook & analytics.',
     icon: Target,
-    accent: 'border-l-primary bg-primary/5',
-    iconBg: 'bg-primary/10',
-    iconColor: 'text-primary',
+    hex: '#A855F7',
   },
+};
+
+const ModeCard: React.FC<{
+  mode: string;
+  meta: (typeof MODE_META)[ChapterMode];
+  onClick: () => void;
+}> = ({ meta, onClick }) => {
+  const [hovered, setHovered] = useState(false);
+  const c = meta.hex;
+  const Icon = meta.icon;
+
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      className="mode-card p-5 rounded-2xl border-l-4 flex flex-col items-start text-left hover:-translate-y-1 group"
+      style={{
+        borderLeftColor: c,
+        borderTopColor: hovered ? `${c}8C` : `${c}4D`,
+        borderRightColor: hovered ? `${c}8C` : `${c}4D`,
+        borderBottomColor: hovered ? `${c}8C` : `${c}4D`,
+        borderTopWidth: 1,
+        borderRightWidth: 1,
+        borderBottomWidth: 1,
+        backgroundColor: `${c}0A`,
+        boxShadow: hovered ? `0 4px 24px -4px ${c}40` : 'none',
+      }}
+    >
+      <div
+        className="w-11 h-11 rounded-xl flex items-center justify-center mb-3"
+        style={{ backgroundColor: `${c}24`, color: c }}
+      >
+        <Icon size={22} />
+      </div>
+      <span
+        className="text-[10px] font-black uppercase tracking-widest"
+        style={{ color: c }}
+      >
+        {meta.category}
+      </span>
+      <h4 className="text-lg font-black mt-0.5 text-on-surface group-hover:text-primary transition-colors">
+        {meta.label}
+      </h4>
+      <p className="text-xs text-on-surface-variant font-medium mt-2 leading-relaxed">
+        {meta.desc}
+      </p>
+    </button>
+  );
 };
 
 export const ChapterModeSelector = ({
@@ -172,7 +211,7 @@ export const ChapterModeSelector = ({
                   Generating your chapter revision kit...
                 </p>
                 <p className="text-xs text-on-surface-variant font-medium mt-1 max-w-sm">
-                  This usually takes 5-15 seconds. We're aligning the kit with CBSE Class 10 syllabus.
+                  This usually takes 10-30 seconds. We're aligning the kit with {chapter.board || 'CBSE'} {chapter.classLevel || 'Class 10'} syllabus. If the AI is busy, we'll retry automatically.
                 </p>
               </div>
             ) : generationError ? (
@@ -253,30 +292,9 @@ export const ChapterModeSelector = ({
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {(['visual', 'readwrite', 'audio', 'practice'] as ChapterMode[])
                     .filter(m => chapter.availableModes.includes(m))
-                    .map(m => {
-                      const meta = MODE_META[m];
-                      const Icon = meta.icon;
-                      return (
-                        <button
-                          key={m}
-                          onClick={() => handleModeClick(m)}
-                          className={`p-5 rounded-2xl border border-surface-container border-l-4 ${meta.accent} flex flex-col items-start text-left transition-all hover:-translate-y-1 hover:shadow-md group`}
-                        >
-                          <div className={`w-11 h-11 rounded-xl flex items-center justify-center mb-3 ${meta.iconBg} ${meta.iconColor}`}>
-                            <Icon size={22} />
-                          </div>
-                          <span className={`text-[10px] font-black uppercase tracking-widest ${meta.iconColor}`}>
-                            {meta.category}
-                          </span>
-                          <h4 className="text-lg font-black mt-0.5 text-on-surface group-hover:text-primary transition-colors">
-                            {meta.label}
-                          </h4>
-                          <p className="text-xs text-on-surface-variant font-medium mt-2 leading-relaxed">
-                            {meta.desc}
-                          </p>
-                        </button>
-                      );
-                    })}
+                    .map(m => (
+                      <ModeCard key={m} mode={m} meta={MODE_META[m]} onClick={() => handleModeClick(m)} />
+                    ))}
                 </div>
 
                 {isHindiChapter && (

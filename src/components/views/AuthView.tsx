@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * AuthView — Login / Register page for Klaro.
+ * AuthView — Login / Register page for Lumina.
  */
 
 import React, { useState } from 'react';
@@ -51,7 +51,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSkip }) => {
       >
         {/* Logo */}
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-black text-on-surface tracking-tight">Klaro Learn</h1>
+          <h1 className="text-3xl font-black text-on-surface tracking-tight">Lumina Learn</h1>
           <p className="text-sm text-on-surface-variant font-medium mt-1">
             {mode === 'login' ? 'Welcome back! Sign in to continue.' : 'Create your account to get started.'}
           </p>
@@ -183,7 +183,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSkip }) => {
         </div>
 
         <p className="text-center text-[10px] text-on-surface-variant/60 font-medium mt-6">
-          By signing in, you agree to Klaro's Terms of Service.
+          By signing in, you agree to Lumina's Terms of Service.
         </p>
       </motion.div>
     </div>

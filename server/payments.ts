@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * Razorpay payment integration for Klaro.
+ * Razorpay payment integration for Lumina.
  *
  * Handles order creation and payment signature verification.
  * Uses Razorpay test mode keys from .env for development.
@@ -43,7 +43,7 @@ export async function createOrder(planKey: string, userId: string): Promise<any>
   const order = await getRazorpay().orders.create({
     amount: price.amount,
     currency: price.currency,
-    receipt: `klaro_${userId}_${Date.now()}`,
+    receipt: `lumina_${userId}_${Date.now()}`,
     notes: { userId, planKey },
   });
 

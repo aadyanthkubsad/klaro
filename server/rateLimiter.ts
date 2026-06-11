@@ -5,7 +5,7 @@
  * Per-user/IP rate limiter for AI endpoints.
  *
  * Limits (per rolling 24 h window):
- *   Free:  3 kits, 3 quizzes, 3 flashcards, 0 YouTube recall, 0 PDF, 0 written answer
+ *   Free:  7 kits, 7 quizzes, 7 flashcards, 0 YouTube recall, 0 PDF, 0 written answer
  *   Plus: 20 kits, 30 quizzes, 20 flashcards, 5 YouTube recall/day, 20 PDF, 15 written answer
  *   Pro:  50 kits, 100 quizzes, 50 flashcards, 30 YouTube recall/day, 50 PDF, 50 written answer
  *
@@ -45,16 +45,16 @@ export type EndpointBucket =
  */
 const PLAN_LIMITS: Record<PlanType, Record<EndpointBucket, number>> = {
   free: {
-    'generate-kit':        3,
-    'study-notes':         3,
-    'generate-quiz':       3,
-    'generate-flashcards': 3,
+    'generate-kit':        7,
+    'study-notes':         7,
+    'generate-quiz':       7,
+    'generate-flashcards': 7,
     'youtube-recall':      0,   // Plus/Pro only
     'evaluate-answer':     0,   // Pro only (written answer feedback)
     'pdf-export':          0,   // Plus/Pro only
-    'weak-topic':          2,
-    'focused-review':      2,
-    'summary':             5,
+    'weak-topic':          3,
+    'focused-review':      3,
+    'summary':             7,
     'generate-audio':      0,   // Plus/Pro only
   },
   plus: {

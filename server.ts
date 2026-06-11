@@ -8,14 +8,15 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { retrieveChunks } from './src/data/syllabusRetrieval.js';
+import { getChapterContext } from './src/data/cbseChapterContext.js';
 import { logger, generateRequestId } from './server/logger.js';
 import { validateGenerateKit, validateYouTubeRecall, validateStudyNotes, validateEvaluateAnswer, validateGenerateQuiz, validateGenerateFlashcards, validateWeakTopicAnalysis, validateGenerateAudio, sendValidationErrors, LIMITS } from './server/validate.js';
 import { generateAudio, validateSarvamConfig, SarvamError, cleanupOldAudioFiles } from './server/services/sarvamService.js';
 import { getChapterAudioTarget, describeTarget } from './server/data/chapterWeightage.js';
 import { checkRateLimit, cleanupStaleEntries, getUsageStats, type EndpointBucket, type PlanType } from './server/rateLimiter.js';
 import { enqueueAIRequest, configureQueue, getQueueStats } from './server/queue.js';
-import { cacheGet, cacheSet, buildCacheKey, configureCache, getCacheStats, cleanupExpiredCache, cacheInvalidate } from './server/cache.js';
-import { initDatabase, flushDatabase, getStats, updateStats, getLibrary, addToLibrary, removeFromLibrary, cleanupLibrary, getKit, saveKit, getOrCreateUser, getUserPlan, incrementUserKitCount, getDatabaseStats, getAllKits, createUser, getUserByEmail, getUserById, updateUserPlan, createPaymentRecord, markPaymentPaid, getPaymentByOrderId, getQuizAttempts, upsertQuizAttempts, getMistakeEntries, upsertMistakeEntries, getMasteryEntries, upsertMasteryEntries, getDailyTasksDb, upsertDailyTasks, getActivityLog, upsertActivityLog, getStreakInfo, upsertStreakInfo, getUsageCountersDb, upsertUsageCounter, getPlannerEventsDb, upsertPlannerEvents, getWrittenAnswersDb, upsertWrittenAnswers } from './server/database.js';
+import { cacheGet, cacheSet, buildCacheKey, configureCache, getCacheStats, cleanupExpiredCache, cacheInvalidate, cacheInvalidateByPrefix } from './server/cache.js';
+import { initDatabase, flushDatabase, getStats, updateStats, getLibrary, addToLibrary, removeFromLibrary, cleanupLibrary, getKit, saveKit, getOrCreateUser, getUserPlan, incrementUserKitCount, getDatabaseStats, getAllKits, createUser, getUserByEmail, getUserById, updateUserPlan, createPaymentRecord, markPaymentPaid, getPaymentByOrderId, getQuizAttempts, upsertQuizAttempts, getMistakeEntries, upsertMistakeEntries, getMasteryEntries, upsertMasteryEntries, getDailyTasksDb, upsertDailyTasks, getActivityLog, upsertActivityLog, getStreakInfo, upsertStreakInfo, getUsageCountersDb, upsertUsageCounter, getPlannerEventsDb, upsertPlannerEvents, getWrittenAnswersDb, upsertWrittenAnswers, touchLibraryItem, backfillVarkTypes } from './server/database.js';
 import { authMiddleware, requireAuth, hashPassword, verifyPassword, generateToken } from './server/auth.js';
 import { createOrder, verifyPaymentSignature, isRazorpayConfigured, PLAN_PRICES } from './server/payments.js';
 import { verifyChapter, verifyAllChapters, getVerifiedSubjects } from './server/syllabusVerifier.js';
@@ -64,7 +65,7 @@ function logApiKeyStatus() {
 function logSarvamKeyStatus() {
   const sarvamCheck = validateSarvamConfig();
   console.log('--------------------------------------------------');
-  console.log('[Klaro] Sarvam TTS key check');
+  console.log('[Lumina] Sarvam TTS key check');
   console.log('  Configured:', sarvamCheck.ok);
   if (!sarvamCheck.ok) {
     console.log('  ⚠️  Sarvam TTS disabled. Add SARVAM_API_KEY to .env for AI narration.');
@@ -81,10 +82,25 @@ async function startServer() {
 
   // ── Initialize infrastructure ──────────────────────────────────────────────
   initDatabase();
+
+  // One-time migration: backfill VARK types for legacy 'revision-kit' library items
+  const varkBackfilled = backfillVarkTypes();
+  if (varkBackfilled > 0) {
+    console.log(`[Lumina] VARK backfill: updated ${varkBackfilled} library items from 'revision-kit' to inferred VARK type.`);
+  }
+
+  // Invalidate cached notes and kits so they regenerate with the new topper's notebook prompt
+  const notesInvalidated = cacheInvalidateByPrefix('study-notes');
+  const kitsInvalidated = cacheInvalidateByPrefix('generate-kit');
+  const totalInvalidated = notesInvalidated + kitsInvalidated;
+  if (totalInvalidated > 0) {
+    console.log(`[Lumina] Invalidated ${totalInvalidated} cached entries (${notesInvalidated} notes, ${kitsInvalidated} kits) — prompt updated to topper's notebook style.`);
+  }
+
   configureQueue({
     maxConcurrent: parseInt(process.env.AI_MAX_CONCURRENT || '5', 10),
     maxQueueLength: parseInt(process.env.AI_MAX_QUEUE || '50', 10),
-    requestTimeoutMs: parseInt(process.env.AI_TIMEOUT_MS || '120000', 10),
+    requestTimeoutMs: parseInt(process.env.AI_TIMEOUT_MS || '180000', 10),
   });
   configureCache({
     ttlMs: parseInt(process.env.CACHE_TTL_MS || '3600000', 10),
@@ -126,14 +142,14 @@ async function startServer() {
     // Touch user record
     getOrCreateUser(clientIp);
 
-    // Log completion
+    // Log completion (read req.userPlan at finish time to capture owner overrides)
     res.on('finish', () => {
       const duration = Date.now() - (req as any).startTime;
       if (req.path.startsWith('/api/')) {
         logger.info(`${req.method} ${req.path} ${res.statusCode}`, {
           requestId,
           endpoint: req.path,
-          userPlan: plan,
+          userPlan: (req as any).userPlan || plan,
           clientIp,
           durationMs: duration,
         });
@@ -145,6 +161,48 @@ async function startServer() {
 
   // ── Auth middleware (sets req.userId — allows anonymous fallback) ─────────
   app.use(authMiddleware);
+
+  // ── Owner override — grant Pro plan to founder emails ──────────────────────
+  // Three detection methods (mirrors client-side billingService.ts isOwner):
+  //   1. JWT email from Authorization header (set by authMiddleware above)
+  //   2. DB lookup — check if any owner email account exists and matches this user
+  //   3. Localhost shortcut — auto-pro for local dev (only on 127.0.0.1/::1)
+  const OWNER_EMAILS = ['prashanth.kubsad@gmail.com', 'kubsadaadyanth@gmail.com'];
+  app.use((req: any, _res: any, next: any) => {
+    // Method 1: JWT email from auth header
+    if (req.userEmail && OWNER_EMAILS.includes(req.userEmail)) {
+      req.userPlan = 'pro';
+      return next();
+    }
+    // Method 2: Check if authenticated userId maps to an owner email in DB
+    if (req.userId && req.userId !== 'u-migrated') {
+      try {
+        const dbUser = getUserById(req.userId);
+        if (dbUser?.email && OWNER_EMAILS.includes(dbUser.email)) {
+          req.userEmail = dbUser.email;
+          req.userPlan = 'pro';
+          return next();
+        }
+      } catch { /* DB lookup failed — continue */ }
+    }
+    // Method 3: On localhost, check if ANY owner email exists in DB and
+    // auto-grant Pro. This covers the common dev scenario where the
+    // founder is the only person using the local server.
+    const ip = req.clientIp || '';
+    const isLocalhost = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip === 'localhost';
+    if (isLocalhost) {
+      try {
+        for (const ownerEmail of OWNER_EMAILS) {
+          const ownerUser = getUserByEmail(ownerEmail);
+          if (ownerUser) {
+            req.userPlan = 'pro';
+            return next();
+          }
+        }
+      } catch { /* DB lookup failed — continue */ }
+    }
+    next();
+  });
 
   // ── Auth endpoints ──────────────────────────────────────────────────────────
 
@@ -418,6 +476,47 @@ async function startServer() {
     });
   });
 
+  // ── Admin: Note-type usage analytics ──────────────────────────────────────
+  // Returns aggregated counts of which note styles students are using.
+  // Reads from the activity_log table where type='note-view'.
+  app.get('/api/analytics/note-types', (req, res) => {
+    try {
+      const activities = getActivityLog('u-migrated');
+      const noteViews = activities.filter((a: any) => a.type === 'note-view');
+
+      // Aggregate by note style
+      const byStyle: Record<string, { count: number; chapters: Set<string> }> = {};
+      for (const a of noteViews) {
+        const meta = typeof a.meta === 'string' ? JSON.parse(a.meta) : (a.meta || {});
+        const style = meta.noteStyle || 'unknown';
+        if (!byStyle[style]) byStyle[style] = { count: 0, chapters: new Set() };
+        byStyle[style].count++;
+        if (a.chapter_title) byStyle[style].chapters.add(a.chapter_title);
+      }
+
+      const result = Object.entries(byStyle).map(([style, data]) => ({
+        noteStyle: style,
+        viewCount: data.count,
+        uniqueChapters: data.chapters.size,
+        chapters: [...data.chapters],
+      })).sort((a, b) => b.viewCount - a.viewCount);
+
+      res.json({
+        success: true,
+        data: {
+          totalNoteViews: noteViews.length,
+          byStyle: result,
+          // Summary for tier planning: which styles are most used?
+          tierRecommendation: result.length > 0
+            ? `Most used: ${result[0].noteStyle} (${result[0].viewCount} views). Consider keeping popular styles in Free tier.`
+            : 'No note-type usage data yet.',
+        },
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // Reference to sessionData for backward compat with existing endpoints
   // All data now flows through database.ts, this is just an alias layer
   const sessionData = {
@@ -451,6 +550,8 @@ async function startServer() {
     const { id } = req.params;
     const kit = getKit(id);
     if (!kit) return res.status(404).json({ error: 'Kit not found' });
+    // Update "last studied" timestamp on the matching library item
+    touchLibraryItem(id);
     res.json({ success: true, data: kit });
   });
 
@@ -525,9 +626,12 @@ async function startServer() {
       return { code: 'CONTENT_BLOCKED', status: 400, message: 'The AI content filter blocked this request. This may be a false positive — please try again.' };
     }
     if (msg.includes('invalid json') || msg.includes('truncated') || msg.includes('parse') || msg.includes('incomplete')) {
-      return { code: 'PARSE_ERROR', status: 502, message: 'The AI response was incomplete or corrupted. Please try again — Hindi chapters may need a second attempt.' };
+      return { code: 'PARSE_ERROR', status: 502, message: 'The AI response was incomplete or corrupted. Please try again.' };
     }
-    if (msg.includes('network') || msg.includes('fetch') || msg.includes('econnrefused') || msg.includes('timeout') || msg.includes('enotfound')) {
+    if (msg.includes('timed out') || msg.includes('timeout')) {
+      return { code: 'TIMEOUT', status: 504, message: 'AI generation took too long. This can happen when the AI service is busy — please try again.' };
+    }
+    if (msg.includes('network') || msg.includes('fetch') || msg.includes('econnrefused') || msg.includes('enotfound')) {
       return { code: 'NETWORK_ERROR', status: 503, message: 'Could not reach the AI service. Check your internet connection and try again.' };
     }
     if (msg.includes('unavailable') || msg.includes('high demand') || msg.includes('503') || msg.includes('overloaded')) {
@@ -552,14 +656,18 @@ async function startServer() {
 
     const contentsObj = typeof contents[0] === 'string' ? [{ role: "user", parts: contents.map(c => ({ text: c })) }] : contents;
 
-    const models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite"];
+    // Primary models for large prompts (kit generation); lite models as last resort.
+    const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite"];
     let response;
     let lastError: any;
+
+    // Per-attempt timeout prevents one slow model from eating the entire queue budget.
+    const PER_ATTEMPT_TIMEOUT_MS = 45_000; // 45 seconds per attempt
 
     for (const model of models) {
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          response = await ai.models.generateContent({
+          const attemptPromise = ai.models.generateContent({
             model,
             contents: contentsObj,
             config: {
@@ -574,23 +682,32 @@ async function startServer() {
               ],
             }
           });
+
+          // Race against per-attempt timeout
+          response = await Promise.race([
+            attemptPromise,
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`Model ${model} timed out after ${PER_ATTEMPT_TIMEOUT_MS / 1000}s`)), PER_ATTEMPT_TIMEOUT_MS)
+            ),
+          ]);
           break;
         } catch (e: any) {
           lastError = e;
           const msg = (e.message || '').toLowerCase();
+          const isTimeout = msg.includes('timed out') || msg.includes('timeout');
           const isTransient = msg.includes('503') || msg.includes('unavailable') || msg.includes('high demand') || msg.includes('overloaded');
           const isQuota = msg.includes('429') || msg.includes('quota') || msg.includes('resource_exhausted') || msg.includes('rate_limit');
           const isDailyQuota = isQuota && msg.includes('limit: 0');
           const isNotFound = msg.includes('404') || msg.includes('not found') || msg.includes('not_found');
-          const canFallback = isTransient || isQuota || isNotFound;
-          if ((isTransient || (isQuota && !isDailyQuota)) && attempt === 0) {
-            const waitSec = isQuota ? 5 : 3;
-            console.warn(`Gemini ${model} returned ${isQuota ? '429' : '503'}, retrying in ${waitSec}s...`);
+          const canFallback = isTransient || isQuota || isNotFound || isTimeout;
+          if ((isTransient || isTimeout || (isQuota && !isDailyQuota)) && attempt === 0) {
+            const waitSec = isQuota ? 5 : 2;
+            console.warn(`Gemini ${model} ${isTimeout ? 'timed out' : isQuota ? '429' : '503'}, retrying in ${waitSec}s...`);
             await new Promise(r => setTimeout(r, waitSec * 1000));
             continue;
           }
           if (canFallback && models.indexOf(model) < models.length - 1) {
-            console.warn(`Gemini ${model} unavailable (${isDailyQuota ? 'daily quota' : isQuota ? 'rate limit' : isNotFound ? 'not found' : '503'}), falling back to next model...`);
+            console.warn(`Gemini ${model} unavailable (${isTimeout ? 'timeout' : isDailyQuota ? 'daily quota' : isQuota ? 'rate limit' : isNotFound ? 'not found' : '503'}), falling back to next model...`);
             break;
           }
           console.error("Gemini error response:", e.message || String(e));
@@ -627,6 +744,15 @@ async function startServer() {
 
     if (respFormat === "application/json") {
        let cleanText = rawText;
+
+       // Strip ANSI escape codes that Gemini sometimes injects (ESC[1m, ESC[0m, etc.)
+       // These render as □ boxes in the browser.
+       // eslint-disable-next-line no-control-regex
+       cleanText = cleanText.replace(/\x1b\[[\d;]*[A-Za-z]/g, '');
+       // Also strip any remaining raw control characters (except \n \r \t which are valid in JSON strings)
+       // eslint-disable-next-line no-control-regex
+       cleanText = cleanText.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+
        const codeBlockMatch = cleanText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
        if (codeBlockMatch) cleanText = codeBlockMatch[1];
 
@@ -652,8 +778,42 @@ async function startServer() {
                return JSON.parse(trimmed);
              }
            } catch (_) { /* fall through */ }
+
+           // ── Truncated JSON repair ──────────────────────────────────────
+           // Gemini sometimes returns JSON that's cut off mid-string or
+           // mid-array. Try to close open brackets/braces to salvage the
+           // partial data rather than failing entirely.
+           try {
+             let repaired = cleanText.trim();
+             // Strip trailing comma before we close structures
+             repaired = repaired.replace(/,\s*$/, '');
+             // Close any unclosed strings
+             const quoteCount = (repaired.match(/(?<!\\)"/g) || []).length;
+             if (quoteCount % 2 !== 0) repaired += '"';
+             // Count open vs close braces/brackets
+             let openBraces = 0, openBrackets = 0;
+             let inString = false;
+             for (let ci = 0; ci < repaired.length; ci++) {
+               const ch = repaired[ci];
+               if (ch === '"' && (ci === 0 || repaired[ci - 1] !== '\\')) { inString = !inString; continue; }
+               if (inString) continue;
+               if (ch === '{') openBraces++;
+               else if (ch === '}') openBraces--;
+               else if (ch === '[') openBrackets++;
+               else if (ch === ']') openBrackets--;
+             }
+             // Strip trailing comma again after quote fix
+             repaired = repaired.replace(/,\s*$/, '');
+             // Close remaining open structures
+             while (openBrackets > 0) { repaired += ']'; openBrackets--; }
+             while (openBraces > 0) { repaired += '}'; openBraces--; }
+             const repairedObj = JSON.parse(repaired);
+             console.warn("Repaired truncated JSON successfully. Original length:", rawText.length);
+             return repairedObj;
+           } catch (_repairErr) { /* repair failed too */ }
+
            console.error("Failed to parse JSON from Gemini. Length:", rawText.length, "First 500 chars:", rawText.substring(0, 500));
-           throw new Error("Invalid JSON from Gemini. The response may have been truncated — please try again.");
+           throw new Error("The AI response was incomplete or corrupted. Please try again.");
          }
        }
     }
@@ -667,18 +827,25 @@ async function startServer() {
       const valErrors = validateWeakTopicAnalysis(req.body);
       if (sendValidationErrors(res, valErrors)) return;
 
-      const { weakTopics, mistakes } = req.body;
+      const { weakTopics, mistakes, subject = '', chapterTitle = '' } = req.body;
       const mistakesContext = mistakes.map((m: any) => `Q: ${m.question}\nCorrect: ${m.correction}`).join("\n\n");
       const topicsContext = weakTopics.join(", ");
-      
-      const prompt = `Analyze the user's mistakes and weak topics. Weak topics: ${topicsContext}.
+      const isHindiSubject = (subject || '').toLowerCase() === 'hindi';
+      const hindiLangRule = isHindiSubject
+        ? `\n\nLANGUAGE RULE — MANDATORY: Write ALL output in HINDI using Devanagari script (देवनागरी लिपि). This includes notes, tips, keywords, quiz questions, options, and explanations. Do NOT use English anywhere except JSON keys. Do NOT transliterate Hindi using Roman/Latin characters.`
+        : '';
+      const chapterScope = chapterTitle
+        ? `\nThe student is studying the chapter "${chapterTitle}"${subject ? ` in ${subject}` : ''}. Focus ONLY on this chapter.`
+        : '';
+
+      const prompt = `Analyze the user's mistakes and weak topics. Weak topics: ${topicsContext}.${chapterScope}
 Here are the past mistakes they made:
 ${mistakesContext}
 
 CRITICAL RULES:
 - Focus ONLY on the SINGLE most recent chapter/topic the student studied. Do NOT mix concepts from different chapters.
 - If multiple chapters appear in the mistakes, pick the one with the most mistakes and cover ONLY that chapter.
-- The notes must be chapter-specific — e.g. "Acids, Bases and Salts" only, not a mix of Chemistry and Biology.
+- The notes must be chapter-specific — e.g. "Acids, Bases and Salts" only, not a mix of Chemistry and Biology.${hindiLangRule}
 
 Identify the specific sub-topics or conceptual gaps based on these mistakes.
 Generate:
@@ -693,7 +860,7 @@ Respond ONLY with a JSON object that strictly follows this interface:
   "tips": "string — bulleted list of actionable tips with • prefix",
   "keywords": ["keyword1", "keyword2", "keyword3"],
   "quiz": {
-    "title": "Weak Topic Remediation Quiz",
+    "title": "${chapterTitle ? `${chapterTitle} — Remediation Quiz` : 'Weak Topic Remediation Quiz'}",
     "questions": [
       {
         "question": "...",
@@ -725,7 +892,7 @@ Respond ONLY with a JSON object that strictly follows this interface:
 Here are some past mistakes they made:
 ${mistakesContext}
 
-Create a new set of strictly 10 multiple-choice questions that specifically target these weak areas and past mistakes. Mix difficulty: 3 easy, 5 medium, 2 hard. Include a "difficulty" field ("easy"|"medium"|"hard") and "topicTag" field for each question.
+Create a new set of strictly 10 multiple-choice questions that specifically target these weak areas and past mistakes. Mix difficulty: 3 easy, 5 medium, 2 hard. Include a "difficulty" field ("easy"|"medium"|"hard"), "topicTag" field, and "cognitiveLevel" field ("recall"|"understand"|"apply"|"analyze") for each question. Bloom's levels: recall = facts/definitions, understand = explain/compare, apply = solve/use in new context, analyze = multi-step/evaluate.
 
 IMPORTANT — SYLLABUS BOUNDARY:
 - You MUST only ask questions within the CBSE Class 10 NCERT syllabus.
@@ -769,7 +936,7 @@ Respond with ONLY a JSON object that satisfies this EXACT interface:
         },
       });
 
-      let { topic, manualText, sourceText, classLevel, examMode, sourceType, imageBase64, mimeType, chapterTitle, subject, board, mode, language, chapterId, academicYear } = req.body;
+      let { topic, manualText, sourceText, classLevel, examMode, sourceType, imageBase64, mimeType, chapterTitle, subject, board, mode, language, chapterId, academicYear, stream } = req.body;
 
       let rawKey = process.env.GEMINI_API_KEY || "";
       const apiKey = rawKey.replace(/^["']|["']$/g, '').trim();
@@ -792,6 +959,10 @@ Respond with ONLY a JSON object that satisfies this EXACT interface:
         return res.status(400).json({ success: false, error: "Please enter a topic or upload content." });
       }
 
+      // Debug logging for kit generation context
+      if (chapterTitle) {
+        console.log(`[generate-kit] Chapter: "${chapterTitle}" | Class: ${classLevel || 'Class 10'} | Subject: ${subject || 'N/A'} | Mode: ${mode || 'all'} | Stream: ${req.body.stream || 'N/A'}`);
+      }
       console.log("Resolved topic:", topic || "Extracted from image");
 
       // ── Syllabus chunk retrieval (RAG-ready grounding) ────────────────────
@@ -813,13 +984,42 @@ Use only the provided syllabus context and general educational explanation. Do n
 
       // When the request comes from the predefined chapter library, lock the
       // prompt to that chapter so Gemini doesn't drift into adjacent syllabus.
+      // Also inject the complete NCERT topic list so no sub-topic is skipped.
+      const chapterCtx = chapterTitle ? getChapterContext(chapterTitle, subject, classLevel) : null;
+      const ncertTopicList = chapterCtx?.ncertTopics?.length
+        ? `
+MANDATORY NCERT TOPIC COVERAGE (you MUST cover ALL of these — do not skip any):
+${chapterCtx.ncertTopics.map((t, i) => `  ${i + 1}. ${t}`).join('\n')}
+
+IMPORTANT: Every single topic listed above MUST appear in your output — in definitions, keyPoints, summary, quiz questions, or flashcards. If a topic has formulas, include them. If it has numerical methods (e.g. limiting reagent calculations), include a worked example. Skipping any topic is a generation failure.
+`
+        : '';
       const chapterContext = chapterTitle
         ? `
-You are generating a ${board || examMode || 'CBSE'} ${classLevel || 'Class 10'} revision kit for the chapter "${chapterTitle}"${subject ? ` in ${subject}` : ''}.
+You are generating a ${board || examMode || 'CBSE'} ${classLevel || 'Class 10'}${stream ? ` ${stream} stream` : ''} revision kit for the chapter "${chapterTitle}"${subject ? ` in ${subject}` : ''}.
 Academic year: ${retrieval.academicYear}.
+${ncertTopicList}
+SYLLABUS VALIDATION RULES (MANDATORY):
+1. ONLY include concepts that appear in the official NCERT ${classLevel || 'Class 10'} ${subject || ''} textbook for this chapter.
+2. If a topic was REMOVED or REDUCED in recent CBSE syllabus rationalization, do NOT include it.
+3. Do NOT include topics from coaching material, reference books, or competitive exam syllabi unless they are in NCERT.
+4. If you are unsure whether a topic is in the current syllabus, EXCLUDE it rather than risk including out-of-syllabus content.
+5. Flag any concept that is at the boundary of the syllabus by adding "(verify syllabus)" in its examTip.
+
 Keep answers student-friendly, exam-focused, and aligned with the chapter title.
 Do not invent syllabus outside the chapter.
 ${mode ? `The student picked the "${mode}" learning mode — emphasise that section while still returning the full JSON shape.` : ''}
+${(subject || '').toLowerCase() === 'english' ? `
+ENGLISH SUBJECT — SPECIAL INSTRUCTIONS:
+  - "definitions" = important word meanings + literary devices used in the chapter (term + meaning + example from text)
+  - "summary" = chapter/poem summary covering theme, characters, plot progression, and moral
+  - "keyPoints" = include character traits, themes, important quotes, and literary devices — NOT generic points
+  - "flashcards" = front: quote/extract from text → back: speaker, context, significance, literary device
+  - "quiz" = extract-based MCQs (give a passage, ask about meaning/speaker/device), NOT just factual recall
+  - "formulaTable" = use for: Literary Device → Example from Text → Effect/Purpose (rename columns in frontend)
+  - "readWrite.tips" = CBSE answer-writing tips: word limits, marking scheme format, must-include keywords
+  - Include character sketches, extract-based questions, and model answer formats in the content
+` : ''}
 ${syllabusGrounding}
 `
         : '';
@@ -851,7 +1051,7 @@ Every string value in your JSON response MUST be written in HINDI using Devanaga
 ===============================================================
 MANDATORY LANGUAGE OVERRIDE — READ THIS LAST AND OBEY ABSOLUTELY
 ===============================================================
-The student is studying a Hindi (Class 10) chapter. Every single string value in the JSON you return MUST be written in HINDI using Devanagari script (देवनागरी लिपि).
+The student is studying a Hindi (${classLevel || 'Class 10'}) chapter. Every single string value in the JSON you return MUST be written in HINDI using Devanagari script (देवनागरी लिपि).
 
 This applies to:
 - title, subject, summary, keyPoints, definitions (term AND meaning)
@@ -906,7 +1106,9 @@ Write every field in clear, exam-focused English. Do not include any Hindi/Devan
       "options": ["A) विकल्प 1", "B) विकल्प 2", "C) विकल्प 3", "D) विकल्प 4"],
       "answer": "A",
       "explanation": "सही उत्तर की विस्तृत व्याख्या",
-      "topicTag": "उप-विषय"
+      "topicTag": "उप-विषय",
+      "difficulty": "easy|medium|hard",
+      "cognitiveLevel": "recall|understand|apply|analyze"
     }
   ],
   "commonMistakes": ["सामान्य गलती 1", "सामान्य गलती 2"],
@@ -933,6 +1135,9 @@ Write every field in clear, exam-focused English. Do not include any Hindi/Devan
       { "node": "मुख्य विचार 4", "relatesTo": "उपशाखा 4", "reason": "संबंध का विवरण" }
     ]
   },
+  "formulaTable": [
+    { "name": "सूत्र/नियम का नाम", "formula": "गणितीय व्यंजक", "notes": "SI मात्रक, विमीय सूत्र, परीक्षा संकेत" }
+  ],
   "aural": {
     "audioScript": "पूरे अध्याय की विस्तृत व्याख्या बोलकर सुनाने के लिए। हर मुख्य अवधारणा, परिभाषा, सूत्र और उदाहरण शामिल करें। छोटे वाक्य (15-20 शब्द) में लिखें। बिंदु चिह्न या ... का उपयोग न करें। 800-1200 शब्दों का लक्ष्य रखें।",
     "lectureNotes": ["विस्तृत व्याख्यान बिंदु अ", "विस्तृत व्याख्यान बिंदु ब", "विस्तृत व्याख्यान बिंदु स", "विस्तृत व्याख्यान बिंदु द", "विस्तृत व्याख्यान बिंदु इ"]
@@ -954,7 +1159,9 @@ Write every field in clear, exam-focused English. Do not include any Hindi/Devan
       "options": ["A) Option 1", "B) Option 2", "C) Option 3", "D) Option 4"],
       "answer": "A",
       "explanation": "Detailed explanation of why A is correct.",
-      "topicTag": "Subtopic tag string"
+      "topicTag": "Subtopic tag string",
+      "difficulty": "easy|medium|hard",
+      "cognitiveLevel": "recall|understand|apply|analyze"
     }
   ],
   "commonMistakes": ["Mistake 1", "Mistake 2"],
@@ -981,26 +1188,55 @@ Write every field in clear, exam-focused English. Do not include any Hindi/Devan
       { "node": "Core Concept 4", "relatesTo": "Related Topic 4", "reason": "Connection description" }
     ]
   },
+  "formulaTable": [
+    { "name": "Formula/Concept Name", "formula": "Mathematical expression or rule", "notes": "SI units, dimensional formula, exam tip" }
+  ],
   "aural": {
     "audioScript": "A detailed conversational script explaining the full chapter for spoken narration. Cover every key concept, definition, formula, and example. Use short spoken sentences (max 15-20 words). Do NOT use ellipsis dots or bullet points. Write in flowing paragraphs suitable for text-to-speech. Target 800-1200 words so the narration lasts 5-8 minutes.",
     "lectureNotes": ["Detailed lecture note 1", "Detailed lecture note 2", "Detailed lecture note 3", "Detailed lecture note 4", "Detailed lecture note 5"]
   }
 }`;
 
+      // ── Class-aware syllabus boundary ─────────────────────────────────
+      const resolvedClass = classLevel || 'Class 10';
+      const resolvedStream = stream || '';
+      const ageRange = resolvedClass === 'Class 12' ? '17-18' : resolvedClass === 'Class 11' ? '16-17' : '14-16';
+      // Build a dynamic boundary that doesn't forbid the student's own class level
+      const aboveLevels = resolvedClass === 'Class 12'
+        ? 'college-level, JEE Advanced, NEET UG competitive-level'
+        : resolvedClass === 'Class 11'
+          ? 'Class 12, college-level, JEE Advanced, NEET UG competitive-level'
+          : 'Class 11, Class 12, JEE, NEET, or competitive exams';
+      const scienceBoundary = resolvedClass === 'Class 10'
+        ? 'For Science: no molarity calculations, titration numericals, advanced organic chemistry, or college-level concepts.'
+        : resolvedClass === 'Class 11'
+          ? `For Science (${resolvedStream || 'Science'} stream): cover the NCERT ${resolvedClass} syllabus for the specific chapter. Include formulas, derivations, and numerical examples appropriate to ${resolvedClass} NCERT. Do not go beyond ${resolvedClass} NCERT depth.`
+          : `For Science (${resolvedStream || 'Science'} stream): cover the NCERT ${resolvedClass} syllabus for the specific chapter. Include board-exam-level derivations, numericals, and diagrams. Do not include JEE Advanced or NEET competitive-level content.`;
+      const mathBoundary = resolvedClass === 'Class 10'
+        ? `For Maths: no calculus, matrices, or topics beyond ${resolvedClass} NCERT.`
+        : `For Maths: cover the NCERT ${resolvedClass} syllabus depth including all formulas, theorems, proofs, and worked examples. Do not go beyond NCERT ${resolvedClass} scope.`;
+
       const promptTemplate = `${hindiTopDirective}
-You are an expert Indian school teacher for ${classLevel || "Class 10"} students.
+You generate exam-ready revision kits in the style of a ${examMode || 'CBSE'} topper's notebook for ${resolvedClass}${resolvedStream ? ` ${resolvedStream} stream` : ''} students. No filler, no textbook padding — only content that scores marks.
 ${chapterContext}
-Generate a comprehensive revision kit for this topic.
 Topic/Source Material: ${topic || chapterTitle || 'Extracted from image'} ${textRef ? `\nContent: ${textRef}` : ''}
-Level: ${classLevel || "Class 10"}
+Level: ${resolvedClass}${resolvedStream ? ` (${resolvedStream} stream)` : ''}
 Exam mode: ${examMode || "CBSE"}
 
-IMPORTANT — SYLLABUS BOUNDARY:
-- ALL content (summary, quiz, flashcards, definitions, keyPoints) MUST stay strictly within the ${examMode || "CBSE"} ${classLevel || "Class 10"} NCERT syllabus.
-- Do NOT include topics from Class 11, Class 12, JEE, NEET, or competitive exams.
-- For Science: no molarity calculations, titration numericals, advanced organic chemistry, or college-level concepts.
-- For Maths: no calculus, matrices, or topics beyond ${classLevel || "Class 10"} NCERT.
-- Keep all explanations simple and age-appropriate for a ${classLevel || "Class 10"} student (14-16 years old).
+CONTENT RULES:
+- Summary: 3-5 crisp sentences covering what the chapter is about and what's most exam-critical. NEVER open with "This chapter introduces/lays the foundation/covers..." — that is textbook padding. Start with the most important fact or formula.
+- KeyPoints: tight one-line revision bullets — each a fact, formula, or rule. Not vague headings.
+- Definitions: NCERT-exact wording in PLAIN TEXT. No LaTeX, no special Unicode symbols. Write "Delta x" not "\\Delta x". Highlight scoring keywords.
+- Quiz: questions phrased as actual board exams ask them — competency-based (scenario/data/derivation), not "explain the importance of X". Every 3-mark and 5-mark Q must involve derivation, numerical, or data analysis.
+- Flashcards: mix definitions, formulae, common mistakes, numerical answers.
+
+SYLLABUS BOUNDARY:
+- ALL content MUST stay strictly within the ${examMode || "CBSE"} ${resolvedClass}${resolvedStream ? ` ${resolvedStream}` : ''} NCERT syllabus for the specific chapter/topic.
+- Do NOT include topics from ${aboveLevels}.
+- ${scienceBoundary}
+- ${mathBoundary}
+- Use clear, age-appropriate language for a ${resolvedClass} student (${ageRange} years old).
+- The content MUST be specifically about "${topic || chapterTitle}" — do NOT substitute a different topic or give generic content.
 
 Return ONLY valid JSON.
 Do NOT include any markdown formatting or backticks.
@@ -1011,18 +1247,21 @@ Use this EXACT nested structure:
 ${jsonSkeleton}
 
 Requirements:
-- Create exactly 10 questions for the quiz. Mix difficulty: 3 easy, 5 medium, 2 hard.
-- Create at least 8 flashcards covering definitions, processes, equations, and common mistakes.
+- Create exactly 10 questions for the quiz. Mix difficulty: 3 easy, 5 medium, 2 hard. Include at least 2 questions based on previous year CBSE board exam patterns.
+- Tag each question with "cognitiveLevel" using Bloom's taxonomy: "recall" (definitions, facts, lists), "understand" (explain, compare, interpret), "apply" (solve numerical, use formula in new context), "analyze" (multi-step reasoning, evaluate, infer). Mix: ~3 recall, ~3 understand, ~2 apply, ~2 analyze.
+- Create at least 8 flashcards covering: NCERT definitions, formulas with units, processes/reactions, common student mistakes, and comparison pairs.
 - Quiz answers MUST be the single letter (A, B, C, or D) that matches the correct option.
 - Options MUST start with "A) ", "B) ", "C) ", "D) ".
-- Explanations MUST be provided for every question.
+- Explanations MUST be provided for every question and must reference the NCERT concept.
 - All strings must be valid and escape double quotes if they appear within text.
-- mindMap MUST have 4 to 6 nodes. Each node MUST have a descriptive "label" and 2 to 4 "children" sub-branches.
-  Children should be short, meaningful labels (not vague words like "definition" or "concept").
-  Include exam-important facts, formulas, and examples as children.
-- conceptMap MUST have 4 to 6 entries with meaningful "node", "relatesTo", and "reason" values.
-- Create at least 5 keyPoints that cover the most important exam-relevant facts.
-- Create at least 3 tips in readWrite.tips that help students study and avoid common mistakes.
+- mindMap MUST have 4 to 6 nodes representing the KEY EXAM TOPICS for this chapter. Each node MUST have a descriptive "label" and 2 to 4 "children" sub-branches.
+  Children MUST be specific exam-relevant content: formulas (e.g. "F = ma [MLT⁻²]"), key facts (e.g. "7 fundamental SI units"), relationships (e.g. "Accuracy ≠ Precision"), and common exam questions.
+  Do NOT use vague labels like "definition" or "concept" — every child must help a student score marks.
+- conceptMap MUST have 4 to 6 entries showing how concepts CONNECT to each other with exam-relevant "reason" values (e.g. "Dimensional analysis uses fundamental units to verify formula correctness — frequently asked in 2-mark questions").
+- Create at least 7 keyPoints that cover the most important exam-relevant facts. Write as one-line revision statements a student can scan before an exam.
+- Create at least 4 tips in readWrite.tips including: study strategies, common mistakes to avoid, marking scheme insights, and formula memory tricks.
+- readWrite.externalReferences MUST include real, valid NCERT links (https://ncert.nic.in/textbook.php?...) and reputable Indian education sites (Byjus, Vedantu, etc.).
+- formulaTable MUST include EVERY formula, equation, and mathematical relationship that appears in the NCERT textbook for this specific chapter — no limit. For Science/Maths: include all named formulas, derived expressions, chemical equations, conversion relations, and any mathematical rule stated in the chapter (e.g. for "Some Basic Concepts of Chemistry" include: mole concept, molar mass, molarity, molality, mole fraction, mass percentage, ppm, mass of one atom, Avogadro's number relation, percentage composition, empirical/molecular formula relation, stoichiometric calculations, limiting reagent formula, percent yield, Gay-Lussac's law, density relations, etc.). For non-Science subjects, include key facts/dates/rules/literary devices instead. Each entry needs: name (what it is), formula (the expression/rule), notes (SI units, dimensional formula, exam frequency hint). Aim for completeness — missing a formula means the student has an incomplete reference sheet.
 ${hindiFinalOverride}`;
 
       let contents: any[] = [];
@@ -1099,10 +1338,13 @@ ${hindiFinalOverride}`;
 
       console.log("Parsed revision kit successfully. Extracting keys.");
 
-      // Tag the kit with its language and subject so the client can render
-      // Hindi-specific UI (e.g. an English-translation toggle) and match
-      // cached kits by language without re-deriving from the title.
+      // Tag the kit with its language, subject, classLevel, and stream so
+      // the client can render class-appropriate UI and match cached kits.
       parsedKit.language = forceHindi ? 'hi' : 'en';
+      parsedKit.classLevel = classLevel || 'Class 10';
+      if (stream) {
+        parsedKit.stream = stream;
+      }
       if (subject) {
         parsedKit.subject = parsedKit.subject || subject;
       }
@@ -1112,7 +1354,7 @@ ${hindiFinalOverride}`;
 
       const kitId = Date.now().toString();
 
-      sessionData.kits[kitId] = {
+      const kitData = {
         id: kitId,
         ...parsedKit,
         createdAt: new Date().toISOString(),
@@ -1124,12 +1366,24 @@ ${hindiFinalOverride}`;
         },
       };
 
+      // Persist to SQLite via saveKit (sessionData.kits is a getter
+      // proxy — direct assignment would silently drop the data).
+      saveKit(kitId, kitData);
+
       const finalTopic = parsedKit.quiz?.title || parsedKit.title || topic || "Generated Revision Kit";
 
-      sessionData.library.unshift({
+      const modeToLibType: Record<string, string> = {
+        visual: 'visual',
+        readwrite: 'readwrite',
+        audio: 'aural',
+        practice: 'revision-kit',
+      };
+      const libraryType = (mode && modeToLibType[mode]) || 'revision-kit';
+
+      addToLibrary({
         id: kitId,
         title: finalTopic,
-        type: "revision-kit",
+        type: libraryType,
         date: new Date().toLocaleDateString(),
         progress: 0,
         contentSnippet: typeof parsedKit?.summary === 'string' ? parsedKit.summary : (parsedKit?.summary?.executiveSummary || parsedKit?.summary?.text || ""),
@@ -1143,8 +1397,6 @@ ${hindiFinalOverride}`;
           ...(subject ? [subject] : []),
         ],
       });
-
-      const kitData = sessionData.kits[kitId];
 
       // ── Cache the successful result ─────────────────────────────────
       if (cacheKey) {
@@ -1204,54 +1456,100 @@ ${hindiFinalOverride}`;
       const lvl   = classLevel || 'Class 10';
       const board_ = board || examMode || 'CBSE';
 
-      // ── Style-specific instructions ──────────────────────────────────────────
+      // ── Compute dynamic slide count based on NCERT topics ─────────────
+      const slidesChapterCtx = getChapterContext(chapterTitle, subject, classLevel);
+      const ncertTopicCount = slidesChapterCtx?.ncertTopics?.length || 0;
+      // ~2-3 topics per slide. Minimum 6, maximum 14.
+      const dynamicSlideCount = ncertTopicCount > 0
+        ? Math.min(14, Math.max(6, Math.ceil(ncertTopicCount / 2)))
+        : 8; // default when no NCERT topic list available
+      const slideRange = ncertTopicCount > 0
+        ? `${Math.max(6, dynamicSlideCount - 2)}-${dynamicSlideCount}`
+        : '6-10';
+
+      // ── Style-specific instructions (topper's notebook format) ─────────────────
       const styleInstructions: Record<string, string> = {
-        smart: `Generate SMART NOTES — the most useful all-in-one notes style.
-Fill: summary (2-3 detailed paragraphs), keyPoints (8-10 bullets), definitions (all key terms),
-sections (4-6 sections, each with title + detailed content + 2-3 examTips + examples),
-flashcards (10 cards). Leave tables/recallQuestions/conceptConnections/knowledgeCards/examOutline empty arrays.`,
+        smart: `Generate SMART NOTES — dense, structured revision slides. Each slide covers 1-2 closely related NCERT sub-topics.
 
-        cornell: `Generate CORNELL NOTES — the two-column academic note style.
-Fill: summary (concise 1-paragraph recap), keyPoints (6-8 bullets), definitions (key terms),
-sections (one per major subtopic; each section.content = detailed notes in that cell,
-section.cueQuestions = 3-4 self-test questions for the left cue column, section.examTips = exam tips),
-recallQuestions (8-10 active-recall Q+hint+answer pairs),
-flashcards (8 cards). Leave tables/conceptConnections/knowledgeCards/examOutline empty arrays.`,
+ABSOLUTE RULES — violating these is a generation failure:
+1. NO OVERVIEW / INTRODUCTION. First slide = first actual NCERT topic (e.g. "Matter and Its Classification", "Physical Quantities and Units"). Never "Overview", "Introduction", "Sub-topics".
+2. SUBJECT-TOPIC GUARDRAIL: Only content from THIS chapter's NCERT textbook. No cross-chapter/cross-subject contamination.
+3. DENSITY: Each slide must have 7-12 distinct info units (definitions + table rows + formulae + example steps all count). A slide with just 3-4 bullets is a failure.
+4. NO RAW MARKDOWN: No **, ##, *, etc. in output — the frontend renders structured data.
 
-        outline: `Generate an EXAM OUTLINE — hierarchical notes optimised for exam revision.
-Fill: summary (1 paragraph), keyPoints (top 5 most exam-relevant points),
-examOutline.mainTopic and examOutline.subtopics (4-6 subtopics, each with 4-6 keyPoints, 2-3 examples, 3-4 examQuestions),
-sections (mirror the outline as readable paragraphs with examTips),
+Fill the "slides" array (${slideRange} slides covering the ENTIRE chapter — use MORE slides for chapters with many topics). Each slide is a JSON object with these OPTIONAL sections (include only what's relevant to the topic):
+  "definitions": [{ "term": "...", "definition": "...", "example": "e.g., ..." }]
+  "tables": [{ "label": "UPPERCASE LABEL", "columns": [...], "rows": [[...]] }] — use for ANY comparison of ≥2 things. Show ALL rows, never truncate.
+  "comparison_panels": [{ "left": { "title": "...", "content": "..." }, "right": { "title": "...", "content": "..." } }]
+  "compact_grid": [{ "primary": "symbol/label", "secondary": "description" }] — for SI units, postulates, lists of items
+  "formulae": [{ "label": "Name", "formula": "expression with subscripts ₀₁₂₃ and superscripts ⁰¹²³⁻⁺" }]
+  "step_method": { "label": "HOW TO...", "steps": ["Step 1...", "Step 2..."] }
+  "solved_example": { "mark_pattern": "3-mark numerical", "question": "...", "steps": ["..."], "answer": "bold final answer" }
+  "common_mistake": "One specific error students make + correct approach"
+  "exam_tip": "Cite specific marks + years. Never vague 'this is important'."
+
+Also fill: summary (3-5 crisp sentences, NOT "This chapter introduces..."),
+keyPoints (8-10 one-line bullets), definitions (ALL key terms), flashcards (10 cards).
+Leave sections/tables/recallQuestions/conceptConnections/knowledgeCards/examOutline as empty arrays — all content goes in slides.`,
+
+        cornell: `Generate CORNELL NOTES — two-column revision format.
+Fill: summary (3-5 sentences — start with the most critical fact, NOT "This chapter introduces..."),
+keyPoints (6-8 one-line bullets — facts, not headings),
+definitions (key terms with NCERT-exact meaning),
+sections (one per subtopic — FIRST section must be the first actual topic per NCERT order, NEVER "Overview" or "Introduction";
+  section.content = right-column notes: definitions → formulae → key points → solved example → common mistakes,
+  all as numbered bullets with line breaks NOT prose paragraphs;
+  section.cueQuestions = 3-4 self-test Qs for the left cue column, phrased as board-exam questions with marks;
+  section.examTips = specific marking scheme tips),
+recallQuestions (8-10 Q+hint+answer — questions must match board-exam phrasing, not textbook "explain why"),
+flashcards (8 cards). Leave slides/tables/conceptConnections/knowledgeCards/examOutline empty arrays.`,
+
+        outline: `Generate EXAM OUTLINE — hierarchical skeleton for rapid revision.
+Fill: summary (3 sentences), keyPoints (top 5 exam-critical points with mark weightage),
+examOutline.mainTopic and examOutline.subtopics (4-6 subtopics, each with:
+  keyPoints = 4-6 tight bullets covering definition + formula + key fact,
+  examples = 2-3 including at least 1 solved numerical,
+  examQuestions = 3-4 questions phrased EXACTLY as board exams ask them with marks specified),
+sections (one per subtopic — structured bullets mirroring the outline, with examTips citing years),
 flashcards (8 cards covering likely exam answers).
 Leave tables/recallQuestions/conceptConnections/knowledgeCards empty arrays.`,
 
-        comparison: `Generate COMPARISON NOTES — table-driven notes ideal for topics with contrasting concepts.
-Fill: summary (1 paragraph), keyPoints (5-6 bullets), definitions (key terms),
-tables (3-5 comparison tables; each table has a descriptive title, 5-6 meaningful columns e.g.
-"Concept", "Meaning / Definition", "Key Features", "Real-life Example", "Difference from X", "Exam Tip",
-and 3-6 data rows with complete content in every cell — never leave cells blank),
-sections (written context for each comparison with examTips),
+        comparison: `Generate COMPARISON NOTES — table-first format, zero paragraphs for comparisons.
+Fill: summary (3 sentences), keyPoints (5-6 bullets), definitions (key terms),
+tables (3-5 comparison tables; each table MUST have: descriptive title, 4-6 columns e.g.
+"Property", "Concept A", "Concept B", "Key Difference", "Exam Tip",
+and 3-6 data rows with COMPLETE content in every cell — no blanks, no "same as above"),
+sections (brief context for each table — why this comparison matters for the exam, with examTips citing specific marks),
 flashcards (8 cards). Leave recallQuestions/conceptConnections/knowledgeCards/examOutline empty arrays.`,
 
-        recall: `Generate RECALL NOTES — active-recall format for spaced repetition study.
-Fill: summary (1 paragraph), keyPoints (6-8 bullets), definitions (all key terms),
-recallQuestions (12-15 questions — each must have a clear question, a one-sentence hint, and a full correct answer),
-sections (4-5 sections with content + cueQuestions for additional recall prompts),
-flashcards (12 cards with varied front/back phrasing for maximum recall coverage).
+        recall: `Generate RECALL NOTES — active-recall format for self-testing.
+Fill: summary (3 sentences), keyPoints (6-8 bullets), definitions (all key terms),
+recallQuestions (12-15 questions — phrased as ACTUAL board exam questions:
+  "Write the dimensional formula of X" not "What do you know about X?";
+  each with a one-line hint and a FULL correct answer that would score full marks),
+sections (4-5 sections with content as structured bullets + cueQuestions for self-testing),
+flashcards (12 cards — emphasize formula recall, common mistakes, numerical answers).
 Leave tables/conceptConnections/knowledgeCards/examOutline empty arrays.`,
 
-        'concept-map': `Generate CONCEPT MAP NOTES — relationship-focused text-based mind map.
-Fill: summary (1 paragraph), keyPoints (5-7 bullets), definitions (all key terms),
-conceptConnections (12-18 connections; each with concept, connectedConcept, relationship description, whyItMatters for exam),
-sections (3-4 narrative sections explaining how the concepts cluster together),
-flashcards (8 cards on the most important concept pairs).
-Leave tables/recallQuestions/knowledgeCards/examOutline empty arrays.`,
+        'concept-map': `Generate CONCEPT MAP NOTES — relationship-focused connections.
+Fill: summary (3 sentences — start with core concept, NOT "This chapter introduces..."),
+keyPoints (5-7 bullets), definitions (all key terms),
+conceptConnections (12-18 connections; each with concept, connectedConcept,
+  relationship = precise link e.g. "Dimensional formula of velocity = [M⁰L¹T⁻¹] derives from distance/time",
+  whyItMatters = exam relevance e.g. "Understanding this connection helps solve 3-mark derivation Qs"),
+sections (3-4 sections — FIRST section must be the first actual topic per NCERT order, NEVER "Overview";
+  each groups related concepts and explains the cluster with examTips),
+flashcards (8 cards on the most exam-critical concept pairs).
+Leave slides/tables/recallQuestions/knowledgeCards/examOutline empty arrays.`,
 
-        'knowledge-cards': `Generate KNOWLEDGE CARDS (Zettelkasten-style atomic notes) — one idea per card.
-Fill: summary (1 paragraph), keyPoints (5-6 bullets), definitions (key terms),
-knowledgeCards (12-18 cards; each with a single atomic idea (3-7 words), a 2-3 sentence explanation,
-2-4 linkedConcepts (other card ideas), and a precise quizQuestion with the answer embedded in it),
-sections (3-4 sections grouping the cards by theme),
+        'knowledge-cards': `Generate KNOWLEDGE CARDS — Zettelkasten-style atomic revision cards.
+Fill: summary (3 sentences), keyPoints (5-6 bullets), definitions (key terms),
+knowledgeCards (12-18 cards; each with:
+  idea = one atomic concept (3-7 words, e.g. "Dimensional formula of force"),
+  explanation = 2-3 sentences covering definition + formula + exam tip (NOT paragraph fluff),
+  linkedConcepts = 2-4 related card ideas,
+  quizQuestion = board-exam-style question testing this idea with the answer embedded),
+sections (3-4 sections grouping cards by exam topic cluster),
 flashcards (10 cards matching the knowledge card questions).
 Leave tables/recallQuestions/conceptConnections/examOutline empty arrays.`,
       };
@@ -1266,7 +1564,49 @@ Leave tables/recallQuestions/conceptConnections/examOutline empty arrays.`,
         : subjectLC === 'social science' || subjectLC === 'history' || subjectLC === 'geography' || subjectLC === 'civics' || subjectLC === 'economics'
           ? `SOCIAL SCIENCE-SPECIFIC: Include a chronological timeline of key events (if history), important personalities and their roles, cause-and-effect chains, geographical or map-based points, important statistics or data, and treaty/act names with dates.`
         : subjectLC === 'english'
-          ? `ENGLISH-SPECIFIC: Include theme and central idea, a chapter/poem summary, character sketches (name → personality → role → key quote), important lines/stanzas with explanation, word meanings and literary devices, and likely long-answer question themes.`
+          ? `ENGLISH-SPECIFIC (modelled on CBSE English topper handwritten notes — follow this EXACT structure):
+
+CBSE ENGLISH BOARD EXAM PATTERN (2025-26):
+  - Reading comprehension (26 marks): Unseen passages — factual, discursive, case-based
+  - Writing skills (26 marks): Notice/invitation, article/report/speech, letter (formal/informal)
+  - Literature (28 marks): Extract-based (1-mark MCQs), short answer (2-mark), long answer (5-mark)
+
+FOR PROSE CHAPTERS (Flamingo / Hornbill / Snapshots / Vistas):
+  1. CHAPTER AT A GLANCE: 3-4 line summary covering setting, main events, and outcome
+  2. THEME & CENTRAL IDEA: State the theme in 2-3 exam-ready sentences (these exact lines score full marks in 2-mark questions)
+  3. CHARACTER SKETCHES: For each major character create a card:
+     • Name → Personality traits (3-4 adjectives) → Role in the story → Key quote from the text
+     • Include the character's transformation/arc if any
+  4. IMPORTANT EXTRACTS: Pick 4-6 key passages that are most likely to appear in extract-based questions:
+     • Quote the exact lines → Explain the meaning → Identify the speaker/context → Note the literary device used
+  5. WORD MEANINGS: List 10-15 difficult words from the chapter with meanings (these appear as 1-mark MCQs)
+  6. SHORT ANSWER QUESTIONS (2-mark pattern): Include 5-6 questions with model answers (40-50 words each):
+     • Answer format: Direct statement + brief explanation + textual evidence
+     • Start with the chapter/author reference: "In the chapter [X], the author [Y]..."
+  7. LONG ANSWER QUESTIONS (5-mark pattern): Include 2-3 questions with model answers (120-150 words):
+     • CBSE marking scheme: Introduction (1 mark) + 3 content points with textual evidence (3 marks) + Conclusion (1 mark)
+     • Use phrases: "The author conveys...", "This is evident when...", "For instance, in the text..."
+  8. MESSAGE / MORAL: What the chapter teaches — exam-ready 2-3 sentences
+  9. AUTHOR'S STYLE: Writing technique, narrative perspective, tone (these appear in extract-based questions)
+
+FOR POETRY (Flamingo / Hornbill poems):
+  1. POEM SUMMARY: 3-4 lines covering the poem's subject and progression
+  2. CENTRAL THEME: Exam-ready statement of the poet's message
+  3. STANZA-BY-STANZA EXPLANATION: For each important stanza:
+     • Quote key lines → Paraphrase in simple English → Identify poetic devices (metaphor, simile, alliteration, personification, imagery, enjambment, rhyme scheme)
+  4. LITERARY DEVICES: Create a table: Device → Example from poem → Effect/Purpose
+  5. EXTRACT-BASED QUESTIONS: 4-5 probable extracts with MCQ-style questions and answers
+  6. SHORT & LONG ANSWER QUESTIONS: With model answers using the marking scheme format
+  7. POET'S BIOGRAPHY: 2-3 lines (name, era, major works, writing style) — appears in 1-mark questions
+  8. DIFFICULT WORDS: Word → Meaning → Sentence usage
+
+TOPPER ANSWER FORMAT RULES (NON-NEGOTIABLE):
+  • Start every answer with a reference to the text: "In [chapter/poem name] by [author]..."
+  • Include at least one direct quote from the text in every 5-mark answer
+  • Use transitional phrases: "Furthermore...", "Additionally...", "This is significant because..."
+  • For character sketches: use adjectives from the text, not generic ones
+  • For extract-based: always identify speaker, context, and literary device
+  • Keep word limits strict: 2-mark = 40-50 words, 5-mark = 120-150 words`
         : subjectLC === 'hindi'
           ? `HINDI-SPECIFIC: पाठ का केंद्रीय विषय, पात्र-चित्रण (नाम → स्वभाव → भूमिका → महत्वपूर्ण पंक्ति), कठिन शब्दों के अर्थ, महत्वपूर्ण पंक्तियों की व्याख्या, और संभावित प्रश्न-उत्तर शामिल करें।`
         : `Include relevant formulas/definitions, real-life examples, key facts, and common mistakes.`;
@@ -1279,14 +1619,69 @@ Leave tables/recallQuestions/conceptConnections/examOutline empty arrays.`,
         ? `\nSOURCE MATERIAL (base your notes ENTIRELY on this content — do NOT invent facts beyond it):\n---\n${sourceContent}\n---\nIMPORTANT: Your notes MUST be grounded in the source material above. Extract, reorganise, and elaborate on what is provided. Do not add unrelated information.\n`
         : '';
 
+      // ── CBSE board exam question pattern alignment ──────────────────────────
+      // Research findings from CBSE topper handwritten notes (2024-2026 board years):
+      //   - Toppers open with a chapter-at-a-glance card: sub-topics list, key formulae snapshot, high-frequency Qs
+      //   - Definitions: NCERT-exact, 1-2 lines max, scoring keywords underlined/bolded
+      //   - Tables and bullets dominate; prose paragraphs are almost never used
+      //   - Formulae get their own boxed/highlighted line with SI units and dimensional formula
+      //   - Important points marked with stars/boxes (sparingly, 3-4 per section max)
+      //   - Diagrams referenced inline ("draw and label" notes) even in handwritten format
+      //   - Compact: one chapter fits 4-8 pages, not 20+ pages of textbook reproduction
+      //   - CBSE 2025-26 pattern: 50% competency-based, 20% MCQ, 30% descriptive
+      //   - Competency-based = scenario/data/case-study → apply/analyze/derive (NOT "explain importance")
+      const examPatternBlock = `
+BOARD EXAM QUESTION ALIGNMENT (MANDATORY for examTips and sections):
+
+CBSE 2025-26 QUESTION RULES (50% competency-based, 20% MCQ, 30% descriptive):
+Competency-based means the question gives a SITUATION, DATA, or SCENARIO and asks the student to APPLY, ANALYZE, or DERIVE — not merely recall or explain importance.
+
+Mark-wise patterns:
+  1-mark: Direct recall OR competency MCQ with a scenario
+    ✓ "The dimensional formula of angular momentum is ___"
+    ✓ "A student measures the diameter of a wire as 2.34 cm using a screw gauge of least count 0.01 cm. The number of significant figures is ___"
+    ✗ "Define physical quantity" (too plain for competency)
+  2-mark: Short application or distinguish-with-example
+    ✓ "A measurement gives values 5.12, 5.15, 5.13, 5.14. The true value is 5.20. Comment on accuracy and precision."
+    ✓ "Distinguish between fundamental and derived units. Give one example each."
+  3-mark: Derivation OR data-based numerical
+    ✓ "Using dimensional analysis, derive the expression for the time period of a simple pendulum T = f(l, g)."
+    ✓ "The length of a rod is measured as 25.6 ± 0.1 cm and diameter as 2.40 ± 0.02 cm. Calculate the percentage error in its volume."
+  5-mark: Multi-part derivation + application OR case-study based [split as 2+2+1 or 3+2]
+    ✓ "(a) State the principle of homogeneity of dimensions. (b) Using dimensional analysis, derive the relation between frequency, length, tension, and linear mass density. (c) State two limitations. [2+2+1]"
+    ✓ "A student records the following measurements: [data table]. (a) Calculate mean value and absolute error. (b) Find relative and percentage error. (c) Express with correct significant figures. [2+2+1]"
+    ✗ "Explain why accuracy, precision, and significant figures are interconnected and crucial for scientists." — CBSE NEVER asks this.
+
+EVERY 3-mark and 5-mark question MUST involve either a derivation, a numerical calculation, or analysis of given data/scenario. Pure "explain the importance" questions are NOT competency-based and must not be generated.
+
+For Commerce subjects (Accountancy, Business Studies, Economics): competency-based means case studies, journal entries from a scenario, graph interpretation, statement analysis — not "explain the importance of accounting."
+
+Reference latest CBSE sample papers and marking scheme. Include worked numerical examples with CBSE-style values.
+Show step-by-step solution format that earns full marks per the marking scheme.
+`;
+
+      // ── NCERT topic coverage list for study notes ─────────────────
+      const notesChapterCtx = getChapterContext(chapterTitle, subject, classLevel);
+      const notesNcertTopics = notesChapterCtx?.ncertTopics?.length
+        ? `
+MANDATORY NCERT TOPIC LIST — you MUST cover EVERY topic below. Skipping any is a failure:
+${notesChapterCtx.ncertTopics.map((t, i) => `  ${i + 1}. ${t}`).join('\n')}
+
+For SMART notes: each slide should cover 1-3 of these topics. Ensure ALL topics appear across your slides.
+For CORNELL notes: each section should cover 1-2 topics. Ensure ALL topics appear.
+For CONCEPT MAP: every topic must appear as a node or connection.
+`
+        : '';
+
       const prompt = `${langDirective}
 
-You are an expert ${board_} ${lvl} ${subject} teacher. Generate structured study notes.
+You generate revision notes in the style of a ${board_} topper's handwritten notebook — the kind every student wants to photocopy. You are NOT explaining or teaching. You are producing clean, exam-ready reference notes for ${lvl} ${subject}.
 
 Chapter / Topic: ${chapterTitle}
 Subject: ${subject}
 Note Style: ${noteStyle.toUpperCase()}
 Class: ${lvl}  |  Board: ${board_}
+${notesNcertTopics}
 ${sourceBlock}
 NOTE STYLE INSTRUCTIONS:
 ${styleInstructions[noteStyle] || styleInstructions['smart']}
@@ -1294,15 +1689,58 @@ ${styleInstructions[noteStyle] || styleInstructions['smart']}
 SUBJECT-SPECIFIC INSTRUCTIONS:
 ${subjectInstructions}
 
-QUALITY RULES:
-- Write like a real teacher — not generic filler. Every sentence must help a student understand or remember.${sourceContent ? '\n- All notes must reflect the source material provided. Do not generate unrelated content.' : ''}
-- keyPoints must be specific facts/rules/formulas, NOT vague headings.
-- sections.content must be detailed (4-8 sentences minimum per section).
-- definitions.meaning must include an example in brackets where possible.
-- flashcards must cover different angles: definition, application, equation, common mistake, comparison.
-- examTips must be specific and actionable (e.g. "CBSE often asks about X in 3-mark questions").
-- Do NOT repeat the same sentence in multiple fields.
-- All arrays must have at least the minimum count stated in the style instructions.
+${examPatternBlock}
+
+TOPPER'S NOTEBOOK RULES (NON-NEGOTIABLE):
+
+0. NO OVERVIEW / INTRODUCTION SLIDES. NEVER generate:
+   • "Overview" or "Introduction" as a section title
+   • "This chapter introduces/establishes/covers/explores..."
+   • "In this chapter we will learn..."
+   • "Sub-topics List" as a section — this is a table of contents, not content
+   • Any paragraph that DESCRIBES what the chapter is about rather than teaching it
+   The FIRST section MUST be the FIRST actual topic of the chapter, following NCERT textbook order.
+   Examples: Chemistry "Some Basic Concepts" → first section = "Matter and Its Classification". Physics "Units and Measurement" → first section = "Physical Quantities and Units".
+   Start each section with its core definition or concept, then formulae, then key points.
+
+1. NO FILLER. No "dear students", no "physics is an experimental science and accurate measurement is fundamental." That is textbook padding. Cut it. Every sentence must earn its space.
+
+2. STRUCTURE every topic as:
+   • Definition: 1-2 lines, board-exam precise wording that scores full marks
+   • Formula / expression: clearly notated, boxed with ★ if high-yield
+   • Key points: tight numbered bullets, max 1 line each. If it needs 2 lines, split into 2 bullets
+   • Derivation steps (where applicable): numbered, compact, each step ≤1 line
+   • Comparison tables: use tables whenever comparing ≥2 things (NEVER paragraphs for comparisons)
+   • Solved example: ${board_}-pattern numerical with stepwise working
+   • Common mistakes / traps: what specifically loses marks
+   • Exam tip: cite specific mark weightage and year (e.g. "3-mark derivation in 2023, 2024 boards"), NOT generic "this is important"
+
+3. CONTENT must match ${board_} marking scheme:
+   • 1-mark answers: crisp definition or SI unit — max 1-2 lines
+   • 2-mark answers: state + brief explain, OR distinguish between using a mini table
+   • 3-mark answers: derivation with numbered steps, OR numerical with 3 clear steps
+   • 5-mark answers: full derivation with assumptions + limitations listed, OR multi-part numerical
+
+4. NCERT ONLY. Only include concepts from the official NCERT ${lvl} ${subject} textbook. No coaching material, no reference book extras. Use exact NCERT definitions — highlight keywords examiners look for.
+
+5. FORMATTING:
+   • Tables over paragraphs whenever comparing ≥2 things
+   • Every formula gets its own line with clear notation
+   • Use ⭐ sparingly (max 3-4 per section) for genuinely high-probability exam content
+   • examTips must cite specific marks and frequency, never generic warnings
+   • keyPoints = 1-line revision facts a student can scan at 11 PM before the exam
+
+6. WHAT TO PRIORITIZE vs SKIP:
+   • PRIORITIZE: Dimensional formulae tables, derivation steps, error propagation formulae, solved numericals, comparison tables, common mistakes, marking scheme tips
+   • SKIP/MINIMIZE: Historical context ("why is X important"), motivational content, lengthy introductions, paragraph-form explanations of things that fit in a table
+   • The litmus test: if a student opened this note at 11 PM before the exam, would they find exactly what they need in 5 seconds? If no, rewrite.
+
+7. QUALITY GATES:${sourceContent ? '\n   • All notes must reflect the source material provided. Do not generate unrelated content.' : ''}
+   • definitions.meaning = NCERT wording + example in brackets. Use PLAIN TEXT only — no LaTeX (\\Delta, \\frac), no special Unicode symbols, no markdown. Write "Delta x" not "Δx", "m/s" not "ms⁻¹" in definitions.
+   • flashcards = different angles: definition, numerical, formula, mistake, comparison
+   • Do NOT repeat the same sentence across fields
+   • All arrays must meet the minimum counts in the style instructions
+   • Zero tolerance for vague exam questions like "explain the importance of X" — ${board_} never asks this for 3+ marks
 
 Return ONLY valid JSON matching this EXACT structure (no markdown, no backticks):
 
@@ -1313,6 +1751,7 @@ Return ONLY valid JSON matching this EXACT structure (no markdown, no backticks)
   "summary": "detailed summary paragraph(s)",
   "keyPoints": ["specific point 1", "specific point 2"],
   "definitions": [{ "term": "Term", "meaning": "Clear meaning with example" }],
+  "slides": [],
   "sections": [
     {
       "title": "Section Title",
@@ -1351,6 +1790,7 @@ Return ONLY valid JSON matching this EXACT structure (no markdown, no backticks)
       const parsed = await enqueueAIRequest(() => callGemini([prompt]), req.requestId);
 
       // Ensure required arrays exist
+      parsed.slides          = parsed.slides          || [];
       parsed.sections        = parsed.sections        || [];
       parsed.definitions     = parsed.definitions     || [];
       parsed.keyPoints       = parsed.keyPoints       || [];
@@ -1359,10 +1799,54 @@ Return ONLY valid JSON matching this EXACT structure (no markdown, no backticks)
       parsed.recallQuestions = parsed.recallQuestions || [];
       parsed.conceptConnections = parsed.conceptConnections || [];
       parsed.knowledgeCards  = parsed.knowledgeCards  || [];
+
+      // ── Auto-continue for truncated SMART notes ────────────────────
+      // If fewer slides than expected were returned, the response was likely
+      // truncated. Send a continuation prompt to get the remaining slides.
+      // Dynamic threshold: use ~60% of the target slide count.
+      const MIN_SLIDES = ncertTopicCount > 0
+        ? Math.max(4, Math.ceil(dynamicSlideCount * 0.6))
+        : 4;
+      if (noteStyle === 'smart' && parsed.slides.length > 0 && parsed.slides.length < MIN_SLIDES) {
+        logger.info('Auto-continuing truncated SMART notes', {
+          requestId: req.requestId,
+          meta: { slidesReceived: parsed.slides.length, target: MIN_SLIDES, chapter: chapterTitle },
+        });
+        const existingTopics = parsed.slides.map((s: any) => {
+          // Gather topics already covered from definitions, tables, etc.
+          const defs = (s.definitions || []).map((d: any) => d.term).join(', ');
+          const tables = (s.tables || []).map((t: any) => t.label).join(', ');
+          return [defs, tables].filter(Boolean).join('; ');
+        }).filter(Boolean).join(' | ');
+
+        const targetTotal = ncertTopicCount > 0 ? dynamicSlideCount : 8;
+        const moreNeeded = Math.max(2, targetTotal - parsed.slides.length);
+        const continuePrompt = `You already generated ${parsed.slides.length} slides for "${chapterTitle}" (${subject}, ${lvl}). Topics covered so far: ${existingTopics || 'partial coverage'}.
+
+The chapter needs ${moreNeeded} MORE slides (target: ${targetTotal} total) to cover the remaining NCERT sub-topics. Generate ONLY the additional slides — do NOT repeat topics already covered.
+
+Return valid JSON: { "slides": [ ...additional slides only... ] }
+
+Use the same dense slide format: definitions, tables, comparison_panels, compact_grid, formulae, step_method, solved_example, common_mistake, exam_tip. Each slide must have 7-12 info units.`;
+
+        try {
+          const continuation = await enqueueAIRequest(() => callGemini([continuePrompt]), `${req.requestId}-continue`);
+          const extraSlides = continuation?.slides || [];
+          if (extraSlides.length > 0) {
+            parsed.slides = [...parsed.slides, ...extraSlides];
+            logger.info('Auto-continue added slides', { requestId: req.requestId, meta: { added: extraSlides.length, total: parsed.slides.length } });
+          }
+        } catch (contErr: any) {
+          // Non-fatal — we have partial slides, better than nothing
+          logger.warn('Auto-continue failed, using partial slides', { requestId: req.requestId, meta: { error: contErr?.message } });
+        }
+      }
+
       parsed.noteStyle       = noteStyle;
       parsed.subject         = subject;
       parsed.topic           = chapterTitle;
       parsed.language        = isHindi ? 'hi' : 'en';
+      parsed.noteVersion     = parsed.slides?.length > 0 ? 2 : 1;
 
       // ── Cache store ─────────────────────────────────────────────────
       cacheSet(cacheKey, parsed);
@@ -1628,13 +2112,23 @@ Grading rules:
 
         const langLabel = lang === 'hi-IN' ? 'Hindi (Devanagari script)' : lang === 'hinglish' ? 'Hinglish (Roman script, natural mix of Hindi and English)' : 'English';
 
+        // ── NCERT topic list for audio scripts ───────────────────────
+        const audioChapterCtx = getChapterContext(topic, sub, lvl);
+        const audioNcertTopics = audioChapterCtx?.ncertTopics?.length
+          ? `
+MANDATORY NCERT TOPIC LIST — your script MUST explain EVERY topic below. Skipping any is a failure:
+${audioChapterCtx.ncertTopics.map((t: string, i: number) => `  ${i + 1}. ${t}`).join('\n')}
+
+Cover ALL listed topics in your narration. Each topic needs at least a brief explanation.`
+          : '';
+
         // ── Common preamble shared by all styles ──────────────────────
         const preamble = `You are explaining the chapter "${topic}" to a ${lvl} ${sub} student in ${langLabel}.
 
 CHAPTER IMPORTANCE: ~${marksNote} marks in CBSE boards. Depth: "${depthNote}".
 
 MANDATORY LENGTH: fullScript MUST be ${tgtWords}+ words (≈${style === 'clear-narrator' ? Math.round(tgtMin * 0.7) : tgtMin} min at 130 wpm). Shorter than ${Math.round(tgtWords * 0.8)} words is REJECTED.
-
+${audioNcertTopics}
 NARRATION RULES (for TTS — text-to-speech engine reads this aloud):
 - SHORT sentences (max 15-20 words). One idea per sentence.
 - Use [short pause] after each definition or key term.
@@ -2045,6 +2539,7 @@ Rules:
         sourceText = '',
         weakTopics = [] as string[],
         count      = 5,
+        subject    = '',
       } = req.body;
 
       // ── Cache check (skip when targeting weak topics — personalized) ──
@@ -2067,19 +2562,39 @@ Rules:
         ? `\n\nExtra context from the student's revision kit:\n${sourceText.substring(0, 2000)}`
         : '';
 
-      const prompt = `You are an expert ${examMode} teacher preparing a ${classLevel} quiz.
+      // NCERT topic injection — ensure every topic in the chapter gets at least one question
+      const quizChapterCtx = getChapterContext(topic, subject, classLevel);
+      const ncertTopics = quizChapterCtx?.ncertTopics || [];
+      const ncertTopicCtx = ncertTopics.length > 0
+        ? `\n\nNCERT TOPICS for this chapter (you MUST cover EVERY topic with at least one question):\n${ncertTopics.map((t: string, i: number) => `${i + 1}. ${t}`).join('\n')}\n\nDistribute questions evenly across ALL topics above. No topic should be left uncovered.`
+        : '';
+      const isHindiQuiz = (subject || '').toLowerCase() === 'hindi';
+      const hindiQuizCtx = isHindiQuiz
+        ? `\n\nLANGUAGE RULE: Write ALL question text, options, and explanations in HINDI using Devanagari script (देवनागरी लिपि). Do NOT use English — every string must be in Hindi. Only the JSON keys remain in English.`
+        : '';
 
-Topic: "${topic}"${weakCtx}${sourceCtx}
+      // For large question counts, compute difficulty distribution
+      const easyCount = Math.round(count * 0.3);
+      const medCount  = Math.round(count * 0.5);
+      const hardCount = count - easyCount - medCount;
+
+      const prompt = `You are an expert ${examMode} teacher preparing a ${classLevel} quiz${subject ? ` for ${subject}` : ''}.
+
+Topic: "${topic}"${weakCtx}${sourceCtx}${ncertTopicCtx}${hindiQuizCtx}
 
 Generate exactly ${count} multiple-choice questions in ${examMode} ${classLevel} style.
-Mix difficulty: 30% easy, 50% medium, 20% hard (e.g. for 10 questions: 3 easy, 5 medium, 2 hard).
+Mix difficulty: 30% easy, 50% medium, 20% hard (${easyCount} easy, ${medCount} medium, ${hardCount} hard).
+Tag each question with "cognitiveLevel": "recall" (definitions, facts), "understand" (explain, compare), "apply" (solve, use formula), "analyze" (multi-step, evaluate). For ${count} questions, distribute: ~${Math.round(count * 0.25)} recall, ~${Math.round(count * 0.3)} understand, ~${Math.round(count * 0.25)} apply, ~${Math.round(count * 0.2)} analyze.
+
+IMPORTANT — COMPREHENSIVE COVERAGE:
+- Every question MUST test a DIFFERENT concept or subtopic. No two questions should test the same idea.
+- Questions should progress from basic recall to higher-order thinking.
+- Include at least 3 questions based on previous year CBSE board exam patterns.
 
 IMPORTANT — SYLLABUS BOUNDARY:
 - You MUST only ask questions that fall within the ${examMode} ${classLevel} syllabus (NCERT textbook scope).
-- Do NOT include topics from Class 11, Class 12, JEE, NEET, or competitive exams.
-- For Science: stick to NCERT ${classLevel} chapters only. No molarity calculations, titration numericals, advanced organic chemistry, or college-level concepts.
-- For Maths: no calculus, matrices, or topics beyond ${classLevel} NCERT.
-- Keep language simple and age-appropriate for a ${classLevel} student (14-16 years old).
+- Do NOT include topics beyond ${classLevel} NCERT.
+- Keep language simple and age-appropriate for a ${classLevel} student.
 
 Return ONLY a valid JSON object — no markdown, no code fences, no extra text:
 {
@@ -2092,7 +2607,8 @@ Return ONLY a valid JSON object — no markdown, no code fences, no extra text:
       "answer": "A",
       "explanation": "Clear explanation of why A is correct.",
       "topicTag": "Specific subtopic label",
-      "difficulty": "easy"
+      "difficulty": "easy",
+      "cognitiveLevel": "recall"
     }
   ]
 }
@@ -2369,10 +2885,10 @@ Requirements:
         quizCount: kit.quiz.length,
       });
 
-      // Store as a kit in session for library save
+      // Store as a kit in SQLite for library save
       const kitId = Date.now().toString();
       const kitData = { id: kitId, ...kit, createdAt: new Date().toISOString() };
-      sessionData.kits[kitId] = kitData;
+      saveKit(kitId, kitData);
 
       // ── Cache store ─────────────────────────────────────────────────
       cacheSet(cacheKey, { ...kit, id: kitId });

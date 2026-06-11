@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * Structured logger for Klaro backend.
+ * Structured logger for Lumina backend.
  * Logs request metadata, generation times, cache hits, and errors.
  * NEVER logs API keys or sensitive credentials.
  */

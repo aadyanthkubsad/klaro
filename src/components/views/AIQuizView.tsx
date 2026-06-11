@@ -19,6 +19,8 @@ interface AIQuizViewProps {
   modeUsed?: LearningMode;
 }
 
+import { CognitiveLevel } from '../../types';
+
 interface AnswerRec {
   question: string;
   options?: string[];
@@ -27,6 +29,8 @@ interface AnswerRec {
   isCorrect: boolean;
   explanation: string;
   topicTag: string;
+  cognitiveLevel?: CognitiveLevel;
+  difficulty?: string;
 }
 
 function isAnswerCorrect(option: string, answer: string): boolean {
@@ -95,6 +99,8 @@ export const AIQuizView = ({
       isCorrect: correct,
       explanation: question.explanation || '',
       topicTag: (question as any).topicTag || topic,
+      cognitiveLevel: (question as any).cognitiveLevel as CognitiveLevel | undefined,
+      difficulty: (question as any).difficulty,
     };
     const next = [...records, rec];
 

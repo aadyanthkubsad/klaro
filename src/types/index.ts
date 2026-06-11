@@ -140,6 +140,7 @@ export type ForgettingRisk = 'Low' | 'Medium' | 'High';
 
 export interface MasteryEntry {
   topic: string;
+  /** BKT P(Lₙ) × 100 — mastery score BEFORE Ebbinghaus decay. */
   masteryScore: number;
   status: MasteryStatus;
   lastAttemptDate: string;
@@ -148,6 +149,14 @@ export interface MasteryEntry {
   attempts: number;
   /** Ebbinghaus-derived: how likely is this topic to be forgotten right now? */
   forgettingRisk: ForgettingRisk;
+  /** BKT raw P(Lₙ) — probability the skill is learned (0–1). */
+  pLearned?: number;
+  /**
+   * Ebbinghaus stability S — half-life in days. Starts at 3, multiplied by
+   * 1.5 on each successful retrieval, capped at 90. Inspired by Settles &
+   * Meeder (2016) half-life regression from Duolingo.
+   */
+  stability?: number;
 }
 
 export type TaskActionType = 'revision' | 'retest' | 'mistake-review' | 'flashcards' | 'youtube-quiz';
@@ -275,6 +284,7 @@ export type NoteStyle =
   | 'concept-map'
   | 'knowledge-cards';
 
+
 export interface NoteSection {
   title: string;
   content: string;
@@ -321,6 +331,22 @@ export interface ExamOutline {
   subtopics: ExamOutlineSubtopic[];
 }
 
+// ─── Dense Smart Slide format (v2) ────────────────────────────────────────────
+
+export interface SmartSlide {
+  slide_number: number;
+  title: string;
+  definitions?: { term: string; definition: string; example?: string }[];
+  tables?: { label: string; columns: string[]; rows: string[][] }[];
+  comparison_panels?: { left: { title: string; content: string }; right: { title: string; content: string } }[];
+  compact_grid?: { primary: string; secondary: string }[];
+  formulae?: { label: string; formula: string }[];
+  step_method?: { label: string; steps: string[] };
+  solved_example?: { mark_pattern: string; question: string; steps: string[]; answer: string };
+  common_mistake?: string;
+  exam_tip?: string;
+}
+
 export interface GeneratedNotes {
   topic: string;
   subject: string;
@@ -335,6 +361,8 @@ export interface GeneratedNotes {
   conceptConnections?: ConceptConnection[];
   knowledgeCards?: KnowledgeCard[];
   examOutline?: ExamOutline;
+  /** Dense slide format (v2) — used by SMART notes */
+  slides?: SmartSlide[];
 }
 
 // ─── Written Answer Practice ────────────────────────────────────────────────

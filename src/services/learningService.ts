@@ -32,9 +32,9 @@ const STORAGE_KEYS = {
   masteryMap: 'varkify:masteryMap',
   dailyTasks: 'varkify:dailyTasks',
   /** User-added exam/test dates for the monthly planner (PlannerEvent[]). */
-  examDates: 'klaro:examDates',
+  examDates: 'lumina:examDates',
   /** Written answer attempts — exam answer practice with typed or uploaded answers. */
-  writtenAnswers: 'klaro:writtenAnswers',
+  writtenAnswers: 'lumina:writtenAnswers',
 };
 
 const CHANGE_EVENT = 'varkify:learning-loop-change';
@@ -141,11 +141,34 @@ export function getMistakes(): MistakeEntry[] {
 
 export function getMastery(): MasteryEntry[] {
   const raw = read<MasteryEntry[]>(STORAGE_KEYS.masteryMap, []);
-  // Backfill forgettingRisk for old records written before the field existed.
-  return raw.map((m) => m.forgettingRisk
-    ? m
-    : { ...m, forgettingRisk: computeForgettingRisk(m.lastAttemptDate, m.masteryScore) }
-  );
+  return raw.map((m) => {
+    // Backfill stability and pLearned for old records
+    const stability = m.stability || (m.masteryScore >= 75 ? 14 : m.masteryScore >= 55 ? 7 : STABILITY_INIT);
+    const pL = m.pLearned ?? m.masteryScore / 100;
+
+    // Apply Ebbinghaus decay to show *current* retention, not last-quiz score
+    const daysSince = m.lastAttemptDate
+      ? Math.max(0, (Date.now() - new Date(m.lastAttemptDate).getTime()) / 86_400_000)
+      : 0;
+    const decayedPL = ebbinghausDecay(pL, daysSince, stability);
+    const decayedScore = Math.max(0, Math.min(100, Math.round(decayedPL * 100)));
+
+    const risk = computeForgettingRisk(m.lastAttemptDate, decayedScore, stability);
+    const status = statusFromScore(decayedScore, m.attempts, risk);
+
+    return {
+      ...m,
+      masteryScore: decayedScore,
+      pLearned: pL,
+      stability,
+      forgettingRisk: risk,
+      status,
+      // Recompute next revision from stability if not already done
+      nextRevisionDate: m.stability
+        ? m.nextRevisionDate
+        : nextRevisionDateForStability(stability, m.lastAttemptDate || new Date().toISOString()),
+    };
+  });
 }
 
 export function getDailyTasks(): DailyTask[] {
@@ -196,17 +219,35 @@ export function onLearningChange(cb: () => void): () => void {
   };
 }
 
-// ─── Bayesian Knowledge Tracing (BKT) mastery model ─────────────────────────
-// Proper BKT with four parameters. P(L) is the probability the student has
-// learned the concept. Updated after each quiz answer using Bayes' rule.
-// The mastery score (0-100) is derived from P(L).
+// ─── Bayesian Knowledge Tracing (BKT) + Ebbinghaus Decay ────────────────────
+//
+// BKT foundation: Corbett & Anderson (1994), "Knowledge Tracing: Modeling the
+// Acquisition of Procedural Knowledge."
+//
+// P(L) is the probability the student has learned the concept. Updated after
+// each quiz response using Bayes' rule, then decayed over time using an
+// Ebbinghaus-inspired half-life model (Settles & Meeder, 2016 — Duolingo's
+// half-life regression).
+//
+// Future improvements:
+//   - PFA (Pavlik, Cen & Koedinger 2009) — simpler alternative to BKT
+//   - IRT 2PL for question-difficulty calibration (~500+ responses/question)
+//   - SPARFA (Lan et al. 2014) for auto-tagging question difficulty
+//   - DKT (Piech et al. 2015) for cross-skill dependency modeling
 
 const BKT_PARAMS = {
-  pInit: 0.1,   // P(L₀) — prior probability of knowing before any attempt
-  pTransit: 0.3, // P(T) — probability of learning after each opportunity
-  pSlip: 0.1,    // P(S) — probability of wrong answer despite knowing
-  pGuess: 0.25,  // P(G) — probability of correct guess without knowing
+  pInit: 0.1,     // P(L₀) — prior probability of knowing before any attempt
+  pTransit: 0.15, // P(T)  — probability of transitioning unlearned → learned per opportunity
+  pSlip: 0.1,     // P(S)  — probability of wrong answer despite knowing
+  pGuess: 0.25,   // P(G)  — probability of correct guess without knowing (4-option MCQ)
 };
+
+/** Initial Ebbinghaus stability in days — half-life of memory. */
+const STABILITY_INIT = 3;
+/** Factor by which stability grows on each successful retrieval. */
+const STABILITY_GROWTH = 1.5;
+/** Maximum stability (days). Beyond this, the concept is considered permanent. */
+const STABILITY_CAP = 90;
 
 function bktUpdate(pL: number, isCorrect: boolean): number {
   const { pSlip, pGuess, pTransit } = BKT_PARAMS;
@@ -222,36 +263,48 @@ function bktUpdate(pL: number, isCorrect: boolean): number {
     pLGivenObs = (pL * pSlip) / (pL * pSlip + (1 - pL) * (1 - pGuess));
   }
 
+  // Transition: even if not learned yet, each opportunity has a chance of learning
   return pLGivenObs + (1 - pLGivenObs) * pTransit;
 }
 
-function statusFromScore(score: number, attempts: number): MasteryStatus {
-  if (attempts === 0) return 'Not started';
-  if (score >= 90 && attempts >= 2) return 'Mastered';
-  if (score >= 75) return 'Strong';
-  if (score >= 55) return 'Improving';
-  return 'Weak';
-}
-
-function recencyFactor(lastDateISO: string): number {
-  const days = Math.max(0, (Date.now() - new Date(lastDateISO).getTime()) / 86_400_000);
-  return Math.max(0.7, 1 - days / 100);
+/**
+ * Ebbinghaus forgetting curve: P(L, t) = P(Lₙ) × e^(-t/S)
+ * where t = days since last practice, S = stability (half-life in days).
+ *
+ * Reference: Settles & Meeder (2016), "A Trainable Spaced Repetition Model
+ * for Language Learning" — open-sourced by Duolingo.
+ */
+function ebbinghausDecay(pL: number, daysSince: number, stability: number): number {
+  if (daysSince <= 0 || stability <= 0) return pL;
+  return pL * Math.exp(-daysSince / stability);
 }
 
 /**
- * Forgetting risk = how likely the student has forgotten this topic *right now*,
- * given days since last attempt and current mastery score. Mirrors the Ebbinghaus
- * curve: same topic 1 day after a quiz is Low-risk; 14 days after a weak score
- * is High-risk.
+ * Status thresholds — tightened per user requirements:
+ *   - Weak:      <60% OR <2 attempts
+ *   - Developing: 60–79% OR <3 attempts (maps to "Improving")
+ *   - Strong:    ≥80% AND ≥3 attempts
+ *   - Mastered:  ≥90% AND ≥5 attempts AND low forget risk
  */
-export function computeForgettingRisk(lastAttemptISO: string, masteryScore: number): ForgettingRisk {
+function statusFromScore(score: number, attempts: number, forgettingRisk: ForgettingRisk): MasteryStatus {
+  if (attempts === 0) return 'Not started';
+  if (score >= 90 && attempts >= 5 && forgettingRisk === 'Low') return 'Mastered';
+  if (score >= 80 && attempts >= 3) return 'Strong';
+  if (score >= 60 && attempts >= 2) return 'Improving';
+  return 'Weak';
+}
+
+/**
+ * Forgetting risk derived from Ebbinghaus decay.
+ * Uses the actual stability value when available, otherwise estimates from mastery.
+ */
+export function computeForgettingRisk(lastAttemptISO: string, masteryScore: number, stability?: number): ForgettingRisk {
   if (!lastAttemptISO) return 'High';
   const days = Math.max(0, (Date.now() - new Date(lastAttemptISO).getTime()) / 86_400_000);
-  // High mastery decays slowly; weak mastery decays fast (Ebbinghaus shape).
-  const decayPerDay = masteryScore >= 75 ? 0.5 : masteryScore >= 55 ? 1.5 : 3;
-  const erosion = days * decayPerDay;
-  if (erosion < 5)  return 'Low';
-  if (erosion < 15) return 'Medium';
+  const S = stability || (masteryScore >= 75 ? 14 : masteryScore >= 55 ? 7 : STABILITY_INIT);
+  const retained = Math.exp(-days / S);
+  if (retained >= 0.7) return 'Low';
+  if (retained >= 0.4) return 'Medium';
   return 'High';
 }
 
@@ -260,41 +313,64 @@ function recomputeMastery(prev: MasteryEntry | undefined, attempt: QuizAttempt):
   const mistakeCount = (prev?.mistakeCount || 0) + attempt.wrongCount;
 
   // Run BKT update for each answer in this attempt
-  let pL = prev ? (prev.masteryScore / 100) : BKT_PARAMS.pInit;
+  let pL = prev?.pLearned ?? (prev ? prev.masteryScore / 100 : BKT_PARAMS.pInit);
   for (const ans of attempt.answers) {
     pL = bktUpdate(pL, ans.isCorrect);
   }
 
-  // Apply Ebbinghaus decay for time since last attempt
-  const decayed = pL * recencyFactor(attempt.date);
+  // Update stability: grows on successful retrieval (≥70% accuracy), resets partially on failure
+  let stability = prev?.stability || STABILITY_INIT;
+  if (attempt.percentage >= 70) {
+    stability = Math.min(STABILITY_CAP, stability * STABILITY_GROWTH);
+  } else if (attempt.percentage < 50) {
+    // Poor performance — halve the stability (memory wasn't as strong as we thought)
+    stability = Math.max(STABILITY_INIT, stability * 0.5);
+  }
+  // Otherwise (50-69%), stability stays the same
+
+  // Apply Ebbinghaus decay for time since last practice
+  const daysSinceLast = prev?.lastAttemptDate
+    ? Math.max(0, (new Date(attempt.date).getTime() - new Date(prev.lastAttemptDate).getTime()) / 86_400_000)
+    : 0;
+  const decayed = ebbinghausDecay(pL, daysSinceLast, stability);
+
   const estimated = Math.max(0, Math.min(100, Math.round(decayed * 100)));
-  const status = statusFromScore(estimated, attempts);
+  const risk = computeForgettingRisk(attempt.date, estimated, stability);
+  const status = statusFromScore(estimated, attempts, risk);
 
   return {
     topic: attempt.topic,
     masteryScore: estimated,
+    pLearned: pL,
+    stability,
     status,
     lastAttemptDate: attempt.date,
-    nextRevisionDate: nextRevisionDateFor(attempt.percentage, attempt.date),
+    nextRevisionDate: nextRevisionDateForStability(stability, attempt.date),
     mistakeCount,
     attempts,
-    forgettingRisk: computeForgettingRisk(attempt.date, estimated),
+    forgettingRisk: risk,
   };
 }
 
 // ─── Ebbinghaus revision scheduler ───────────────────────────────────────────
-// Returns the *next* date to revise. Full plans are produced by
-// buildRevisionPlan() and turned into tasks.
 
 /**
- * Headline "next revision date" stored on the MasteryEntry.
- * Always the earliest step of buildRevisionPlan() so Analytics can show
- * one concrete date per topic without recomputing the whole plan.
+ * Next revision date driven by stability (half-life).
+ * Schedule revision at ~70% retention point: t = S × ln(1/0.7) ≈ S × 0.357
+ * Clamped to [1, 30] days.
+ */
+function nextRevisionDateForStability(stability: number, dateISO: string): string {
+  const daysUntilReview = Math.max(1, Math.min(30, Math.round(stability * 0.357)));
+  return addDays(dateISO, daysUntilReview);
+}
+
+/**
+ * Legacy fallback — used when stability isn't available (old mastery entries).
  */
 export function nextRevisionDateFor(percentage: number, dateISO: string): string {
-  if (percentage < 50) return addDays(dateISO, 1); // D1
-  if (percentage < 75) return addDays(dateISO, 3); // D3
-  return addDays(dateISO, 7);                       // D7
+  if (percentage < 50) return addDays(dateISO, 1);
+  if (percentage < 75) return addDays(dateISO, 3);
+  return addDays(dateISO, 7);
 }
 
 interface PlanStep {
@@ -661,7 +737,7 @@ export function computeScoreAnalysis(): ScoreAnalysis | null {
 // Pulls together everything the Monthly Planner needs to draw the calendar:
 //   • revision/retest events from dailyTasks (Ebbinghaus-derived)
 //   • forgetting-curve revisions from masteryMap.nextRevisionDate
-//   • user-added exam/test/deadline events from klaro:examDates
+//   • user-added exam/test/deadline events from lumina:examDates
 //
 // All events follow the PlannerEvent shape so the calendar layer doesn't
 // have to know where the data came from.
@@ -686,7 +762,7 @@ export function deleteExamDate(id: string): void {
  * Sources:
  *   - dailyTasks (revision / retest / mistake-review) → revision events
  *   - masteryMap.nextRevisionDate → forgetting-curve revision events
- *   - klaro:examDates → manual test/deadline events
+ *   - lumina:examDates → manual test/deadline events
  *
  * Returns an empty array if nothing has been recorded yet — the Planner
  * view then shows a clean empty state instead of fake data.

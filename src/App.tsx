@@ -49,7 +49,7 @@ import {
   canGenerateFlashcards, incrementFlashcardSetsToday,
   getUsageCounters,
 } from './services/billingService';
-import { logActivity } from './services/activityService';
+import { logActivity, getLastStudiedChapter } from './services/activityService';
 
 export default function App() {
   const { user, logout } = useAuth();
@@ -145,9 +145,9 @@ export default function App() {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3500);
   }, []);
 
-  const fetchRealData = async () => {
+  const fetchRealData = async (opts?: { silent?: boolean }) => {
     try {
-      setIsLoading(true);
+      if (!opts?.silent) setIsLoading(true);
       const response = await fetch('/api/dashboard-data');
       if (!response.ok) throw new Error('Failed to fetch data');
       const result = await response.json();
@@ -158,7 +158,7 @@ export default function App() {
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
     } finally {
-      setIsLoading(false);
+      if (!opts?.silent) setIsLoading(false);
     }
   };
 
@@ -396,7 +396,7 @@ export default function App() {
     try {
       const data = await aiService.generateFlashcards({
         topic,
-        classLevel: 'Class 10',
+        classLevel: currentRevisionKit?.classLevel || 'Class 10',
         examMode: 'CBSE',
       });
       setFlashcardSet({ topic: data.topic, cards: data.flashcards, sourceKitId });
@@ -572,17 +572,52 @@ export default function App() {
         language: resolvedLanguage,
         chapterId: chapter.id,
         academicYear: chapter.academicYear,
+        stream: (chapter as any).stream,
       });
       incrementKitsUsedToday();
       setCurrentRevisionKit(kitData);
       if (target === 'practice') setCurrentPracticeMode(mode === 'audio' ? 'aural' : mode === 'visual' ? 'visual' : mode === 'readwrite' ? 'readwrite' : 'revision-kit');
       // Refresh library so the new kit shows up next time without a regen.
-      fetchRealData().catch(() => { /* non-fatal */ });
+      fetchRealData({ silent: true }).catch(() => { /* non-fatal */ });
       setChapterPicker(null);
       setView(target);
     } catch (err: any) {
+      const msg = err?.message || '';
+      const isTimeout = msg.toLowerCase().includes('too long') || msg.toLowerCase().includes('timed out') || msg.toLowerCase().includes('timeout');
+      const isBusy = msg.toLowerCase().includes('busy') || msg.toLowerCase().includes('503');
+      // Auto-retry once for transient timeout/busy errors before showing the error.
+      if ((isTimeout || isBusy) && !opts?.regenerate) {
+        console.warn('Chapter kit generation timed out — auto-retrying once...');
+        try {
+          const kitData = await aiService.generateRevisionKit({
+            topic: chapter.chapterTitle,
+            chapterTitle: chapter.chapterTitle,
+            subject: chapter.subject,
+            classLevel: chapter.classLevel,
+            examMode: examMode,
+            board: chapter.board,
+            mode,
+            language: resolvedLanguage,
+            chapterId: chapter.id,
+            academicYear: chapter.academicYear,
+            stream: (chapter as any).stream,
+          });
+          incrementKitsUsedToday();
+          setCurrentRevisionKit(kitData);
+          if (target === 'practice') setCurrentPracticeMode(mode === 'audio' ? 'aural' : mode === 'visual' ? 'visual' : mode === 'readwrite' ? 'readwrite' : 'revision-kit');
+          fetchRealData({ silent: true }).catch(() => {});
+          setChapterPicker(null);
+          setView(target);
+          return;
+        } catch (retryErr: any) {
+          console.error('Auto-retry also failed:', retryErr);
+          setChapterGenError(retryErr?.message || 'Generation failed after retry. Please try again.');
+          setChapterGenerating(false);
+          return;
+        }
+      }
       console.error('Chapter kit generation failed:', err);
-      setChapterGenError(err?.message || 'Generation failed. Please try again.');
+      setChapterGenError(msg || 'Generation failed. Please try again.');
     } finally {
       setChapterGenerating(false);
     }
@@ -633,13 +668,15 @@ export default function App() {
           setView(resolvedView);
         }
 
-        // Log resume-learning activity
         logActivity({
           type: 'resume-learning',
           chapterTitle: result.data?.title || result.data?.chapterTitle,
           subject: result.data?.subject,
           xpEarned: 5,
+          meta: { mode: resolvedView },
         });
+        // Refresh library in background so "Last Studied" timestamp updates
+        fetchRealData({ silent: true }).catch(() => { /* non-fatal */ });
       } else {
         showToast('Could not load this content. It may have expired or been deleted during a server restart.', 'error');
       }
@@ -687,7 +724,7 @@ export default function App() {
           {view === 'auth' && <AuthView onSkip={() => setView('dashboard')} />}
           {view === 'dashboard' && <Dashboard setView={setView} generateKit={generateKit} navigateToKit={navigateToKit} library={library} stats={userStats} examMode={examMode} setExamMode={setExamMode} />}
           {view === 'library' && <LibraryView library={library} stats={userStats} setView={setView} navigateToKit={navigateToKit} navigateToMistakes={(topic) => { setMistakesTopicFilter(topic); setView('mistakes'); }} viewWrongAnswers={viewWrongAnswers} goToScoreAnalysis={goToScoreAnalysis} onPickChapter={(c) => { setChapterGenError(null); setChapterPicker(c); }} onRemoveDuplicates={async () => { const res = await fetch('/api/cleanup-library', { method: 'POST' }); const json = await res.json(); if (json.success) { setLibrary(json.data.library); setUserStats(json.data.stats); } }} onDeleteLibraryItem={async (id) => { setLibrary(prev => prev.filter(it => it.id !== id)); try { const res = await fetch('/api/delete-library-item', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); if (res.ok) { const json = await res.json(); if (json.success) { setLibrary(json.data.library); setUserStats(json.data.stats); } } } catch { /* server sync — item is already removed from local state */ } }} onGeneratePracticeFromPattern={async (paper: PaperSource) => { try { setIsLoading(true); const quiz = await aiService.generatePracticeFromPattern({ subject: paper.subject, year: paper.year, paperType: paper.type }); setCurrentAIQuiz(quiz); setCurrentAIQuizMode('revision-kit'); setView('ai-quiz'); } catch (e: any) { showToast(e?.message || 'Practice test generation failed.', 'error'); } finally { setIsLoading(false); } }} onSavePaperToLibrary={(paper: PaperSource) => { const typeMap: Record<string, string> = { 'sample-paper': 'sample-paper', 'previous-year': 'previous-year-paper', 'marking-scheme': 'marking-scheme' }; saveToLibrary({ title: `${paper.subject} ${paper.year} ${paper.type.replace('-', ' ')}`, type: (typeMap[paper.type] || 'sample-paper') as any, contentSnippet: `CBSE ${paper.classLevel} — Official ${paper.type.replace('-', ' ')} (${paper.year}). Source: ${paper.sourceName}`, tags: [paper.subject, paper.year, paper.type], }); }} />}
-          {view === 'analytics' && <AnalyticsView library={library} activeTab={analyticsTab} setActiveTab={setAnalyticsTab} stats={userStats} onSave={saveToLibrary} setView={setView} kit={currentAnalysis} currentTopic={currentRevisionKit?.topic || currentRevisionKit?.chapterTitle} />}
+          {view === 'analytics' && <AnalyticsView library={library} activeTab={analyticsTab} setActiveTab={setAnalyticsTab} stats={userStats} onSave={saveToLibrary} setView={setView} kit={currentAnalysis} currentTopic={currentRevisionKit?.topic || currentRevisionKit?.chapterTitle || getLastStudiedChapter()?.chapterTitle} />}
           {view === 'progress' && <ProgressView setView={setView} stats={userStats} library={library} />}
           {view === 'tests' && <TestsView setView={setView} library={library} kit={currentRevisionKit} setAIQuiz={setCurrentAIQuiz} />}
           {view === 'practice' && <PracticeView setView={setView} kit={currentRevisionKit} stats={userStats} saveMistake={saveMistake} saveQuizScore={saveQuizScore} generateFocusedReview={generateFocusedReview} viewWrongAnswers={viewWrongAnswers} goToScoreAnalysis={goToScoreAnalysis} modeUsed={currentPracticeMode} savedResults={practiceSnapshot} onResultsChange={setPracticeSnapshot} />}

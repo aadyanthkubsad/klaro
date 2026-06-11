@@ -20,6 +20,17 @@ export const TopBar = ({ title, subtitle, library = [] }: TopBarProps) => {
   const [query, setQuery] = useState('');
   const [isFocused, setIsFocused] = useState(false);
 
+  const profileTag = (() => {
+    try {
+      const raw = localStorage.getItem('lumina:user-profile');
+      if (raw) {
+        const p = JSON.parse(raw);
+        return `${p.classLevel || 'Class 10'} · ${p.learningTrack || 'CBSE'}`;
+      }
+    } catch { /* ignore */ }
+    return 'Class 10 · CBSE';
+  })();
+
   const results = query.trim() === '' 
     ? [] 
     : library.filter(item => 
@@ -94,12 +105,12 @@ export const TopBar = ({ title, subtitle, library = [] }: TopBarProps) => {
       <div className="flex items-center gap-6">
         <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-full">
           <Zap size={14} className="text-amber-500 fill-amber-500" />
-          <span className="text-[11px] font-bold text-amber-700 uppercase tracking-wider">7 Day Streak</span>
+          <span className="text-[11px] font-bold text-amber-700 uppercase tracking-wider">Streak</span>
         </div>
         <div className="flex items-center gap-4">
           <div className="text-right hidden md:block">
             <div className="text-sm font-semibold text-on-surface leading-tight">{user?.displayName || 'Learner'}</div>
-            <div className="text-[11px] text-on-surface-variant font-medium">Class 10 • CBSE</div>
+            <div className="text-[11px] text-on-surface-variant font-medium">{profileTag}</div>
           </div>
           <div className="h-9 w-9 rounded-full overflow-hidden border-2 border-white shadow-sm ring-1 ring-slate-200 bg-primary/10 flex items-center justify-center">
             <span className="text-sm font-black text-primary">{(user?.displayName || 'L')[0].toUpperCase()}</span>

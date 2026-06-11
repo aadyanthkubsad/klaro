@@ -24,7 +24,8 @@ export type ActivityType =
   | 'library-save'
   | 'resume-learning'
   | 'written-answer'
-  | 'weak-topic-retest';
+  | 'weak-topic-retest'
+  | 'note-view';
 
 export interface LearningActivity {
   id: string;
@@ -76,9 +77,9 @@ export interface WeeklyReport {
 
 import { schedulePush } from './syncService';
 
-const STORAGE_KEY = 'klaro:activityLog';
-const STREAK_KEY = 'klaro:streak';
-const CHANGE_EVENT = 'klaro:activity-change';
+const STORAGE_KEY = 'lumina:activityLog';
+const STREAK_KEY = 'lumina:streak';
+const CHANGE_EVENT = 'lumina:activity-change';
 
 /** XP awarded per activity type (defaults) */
 const XP_DEFAULTS: Record<ActivityType, number> = {
@@ -92,6 +93,7 @@ const XP_DEFAULTS: Record<ActivityType, number> = {
   'resume-learning': 5,
   'written-answer': 25,
   'weak-topic-retest': 30,
+  'note-view': 3,
 };
 
 // ─── Storage helpers ────────────────────────────────────────────────────────
@@ -157,6 +159,21 @@ export function getActivities(): LearningActivity[] {
   return readStorage<LearningActivity[]>(STORAGE_KEY, []).sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
+}
+
+/**
+ * Return the most recently studied chapter info from the activity log.
+ * Looks for revision-kit, quiz, note-view, or written-answer activities
+ * that have a chapterTitle set.  Returns null if nothing found.
+ */
+export function getLastStudiedChapter(): { chapterTitle: string; subject?: string; classLevel?: string } | null {
+  const all = getActivities(); // already newest-first
+  for (const a of all) {
+    if (a.chapterTitle) {
+      return { chapterTitle: a.chapterTitle, subject: a.subject, classLevel: a.classLevel };
+    }
+  }
+  return null;
 }
 
 /** Get activities within the last N days (inclusive of today). */
@@ -251,16 +268,33 @@ function updateStreak(): void {
   writeStorage(STREAK_KEY, streak);
 }
 
-/** Get current streak info. */
+/** Get current streak info (read-only — does NOT dispatch change events). */
 export function getStreak(): StreakInfo {
-  // Recalculate to ensure accuracy
-  updateStreak();
-  return readStorage<StreakInfo>(STREAK_KEY, {
-    current: 0,
-    longest: 0,
-    lastActiveDate: '',
-    isActiveToday: false,
-  });
+  const all = readStorage<LearningActivity[]>(STORAGE_KEY, []);
+  const today = toDateStr(new Date());
+
+  const activeDates = new Set<string>();
+  for (const a of all) activeDates.add(a.createdAt.slice(0, 10));
+
+  let current = 0;
+  const d = new Date();
+  while (true) {
+    const ds = toDateStr(d);
+    if (activeDates.has(ds)) { current++; d.setDate(d.getDate() - 1); } else break;
+  }
+
+  const sortedDates = [...activeDates].sort();
+  let longest = 0, run = 1;
+  for (let i = 1; i < sortedDates.length; i++) {
+    const prev = new Date(sortedDates[i - 1]);
+    const curr = new Date(sortedDates[i]);
+    if (Math.round((curr.getTime() - prev.getTime()) / 86_400_000) === 1) run++;
+    else { longest = Math.max(longest, run); run = 1; }
+  }
+  longest = Math.max(longest, run);
+  if (sortedDates.length === 0) longest = 0;
+
+  return { current, longest, lastActiveDate: today, isActiveToday: activeDates.has(today) };
 }
 
 // ─── Weekly Report ──────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * SQLite database persistence layer for Klaro.
+ * SQLite database persistence layer for Lumina.
  *
  * Uses better-sqlite3 for synchronous, fast, embedded database.
  * Data is stored in ./data/klaro.db — survives server restarts.
@@ -187,6 +187,75 @@ export function addToLibrary(item: any, userId: string = 'u-migrated') {
     );
     db.prepare('UPDATE stats SET xp = xp + 50 WHERE user_id = ?').run(userId);
   }
+}
+
+/**
+ * One-time migration: update library items with type='revision-kit' to their
+ * correct VARK type by examining the associated kit data and title prefix.
+ * Returns the number of items updated.
+ */
+export function backfillVarkTypes(userId: string = 'u-migrated'): number {
+  const items = db.prepare(
+    "SELECT id, title, type FROM library_items WHERE user_id = ? AND type = 'revision-kit'"
+  ).all(userId) as any[];
+
+  let updated = 0;
+  const updateStmt = db.prepare('UPDATE library_items SET type = ? WHERE id = ? AND user_id = ?');
+
+  for (const item of items) {
+    const titleLC = (item.title || '').toLowerCase();
+
+    // 1. Infer from title prefix (e.g. "Audio: Chapter Name", "Visual: ...")
+    if (/^(audio|aural)\s*[:\-–]/i.test(item.title)) {
+      updateStmt.run('aural', item.id, userId);
+      updated++;
+      continue;
+    }
+    if (/^visual\s*[:\-–]/i.test(item.title)) {
+      updateStmt.run('visual', item.id, userId);
+      updated++;
+      continue;
+    }
+    if (/^(read\/?write|readwrite)\s*[:\-–]/i.test(item.title)) {
+      updateStmt.run('readwrite', item.id, userId);
+      updated++;
+      continue;
+    }
+
+    // 2. Infer from kit data content density
+    const kitRow = db.prepare('SELECT data FROM kits WHERE id = ?').get(item.id) as any;
+    if (kitRow) {
+      try {
+        const kit = JSON.parse(kitRow.data);
+        const visualLen = JSON.stringify(kit.visual || kit.mindMap || kit.flowchart || '').length;
+        const rwLen = JSON.stringify(kit.readWrite || kit.summary || '').length;
+        const auralLen = JSON.stringify(kit.aural || kit.audioScript || '').length;
+
+        if (visualLen > rwLen && visualLen > auralLen && visualLen > 100) {
+          updateStmt.run('visual', item.id, userId);
+          updated++;
+        } else if (auralLen > rwLen && auralLen > visualLen && auralLen > 100) {
+          updateStmt.run('aural', item.id, userId);
+          updated++;
+        } else if (rwLen > 100) {
+          updateStmt.run('readwrite', item.id, userId);
+          updated++;
+        }
+        // If no section has significant content, leave as revision-kit
+      } catch {
+        // JSON parse failed — leave as revision-kit
+      }
+    }
+  }
+
+  return updated;
+}
+
+/** Update only the date field on a library item (for "last studied" tracking). */
+export function touchLibraryItem(id: string, userId: string = 'u-migrated'): boolean {
+  const result = db.prepare('UPDATE library_items SET date = ? WHERE id = ? AND user_id = ?')
+    .run(new Date().toLocaleDateString(), id, userId);
+  return result.changes > 0;
 }
 
 export function removeFromLibrary(id: string, userId: string = 'u-migrated'): boolean {

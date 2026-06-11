@@ -18,7 +18,7 @@ import {
   computeWrittenAnswerAnalytics, WrittenAnswerAnalytics, getQuizHistory,
 } from '../../services/learningService';
 import {
-  getActivitiesForDays, getStreak, getTotalXP, getActivityCounts,
+  getActivitiesForDays, getStreak, getTotalXP, getActivityCounts, getActivities,
   generateWeeklyReport, onActivityChange, StreakInfo, DayActivity, WeeklyReport,
 } from '../../services/activityService';
 
@@ -103,44 +103,56 @@ export const ProgressView = ({ setView, stats, library }: ProgressViewProps) => 
   });
   const weakTopicsList = mastery.filter(m => m.status === 'Weak' || m.status === 'Improving');
 
-  // VARK mastery from actual mode usage
-  const modeQuizzes = quizHistory.reduce((acc, q) => {
-    const m = q.modeUsed || 'revision-kit';
-    acc[m] = (acc[m] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
-  const modeKits = library.reduce((acc, l) => {
-    acc[l.type] = (acc[l.type] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
-  const totalModeActivity = Math.max(
-    (modeQuizzes.visual || 0) + (modeKits.visual || 0) +
-    (modeQuizzes.aural || 0) + (modeKits.aural || 0) +
-    (modeQuizzes.readwrite || 0) + (modeKits.readwrite || 0),
-    1
-  );
+  // VARK mastery from actual mode usage across quizzes, library items, and activity log.
+  // Normalise mode names: 'aural' and 'audio' both map to 'aural', 'revision-kit' is
+  // excluded from VARK (it predates mode selection).
+  const normMode = (m: string): string | null => {
+    if (m === 'visual') return 'visual';
+    if (m === 'aural' || m === 'audio') return 'aural';
+    if (m === 'readwrite' || m === 'read-write') return 'readwrite';
+    return null;
+  };
+  const varkCounts = { visual: 0, aural: 0, readwrite: 0 };
+  for (const q of quizHistory) {
+    const k = normMode(q.modeUsed);
+    if (k) varkCounts[k as keyof typeof varkCounts]++;
+  }
+  for (const l of library) {
+    const k = normMode(l.type);
+    if (k) varkCounts[k as keyof typeof varkCounts]++;
+  }
+  // Also count activity log entries that recorded a mode (resume-learning, etc.)
+  for (const a of getActivities()) {
+    const m = a.meta?.mode;
+    if (m) {
+      const k = normMode(m);
+      if (k) varkCounts[k as keyof typeof varkCounts]++;
+    }
+  }
+  const totalModeActivity = varkCounts.visual + varkCounts.aural + varkCounts.readwrite;
+  console.log('[VARK Debug] counts:', varkCounts, 'total:', totalModeActivity, 'quizModes:', quizHistory.map(q => q.modeUsed), 'libTypes:', library.map(l => l.type));
 
   const varkMastery = [
     {
       label: 'Visual',
-      score: Math.round(((modeQuizzes.visual || 0) + (modeKits.visual || 0)) / totalModeActivity * 100),
+      score: totalModeActivity > 0 ? Math.round((varkCounts.visual / totalModeActivity) * 100) : 0,
       color: 'text-orange-500',
       bg: 'bg-orange-50 border-orange-200',
     },
     {
       label: 'Aural',
-      score: Math.round(((modeQuizzes.aural || 0) + (modeKits.aural || 0)) / totalModeActivity * 100),
+      score: totalModeActivity > 0 ? Math.round((varkCounts.aural / totalModeActivity) * 100) : 0,
       color: 'text-blue-600',
       bg: 'bg-blue-50 border-blue-200',
     },
     {
       label: 'Read/Write',
-      score: Math.round(((modeQuizzes.readwrite || 0) + (modeKits.readwrite || 0)) / totalModeActivity * 100),
+      score: totalModeActivity > 0 ? Math.round((varkCounts.readwrite / totalModeActivity) * 100) : 0,
       color: 'text-purple-600',
       bg: 'bg-purple-50 border-purple-200',
     },
   ];
-  const hasVarkData = totalModeActivity > 1;
+  const hasVarkData = totalModeActivity > 0;
 
   // ── Report generation ──────────────────────────────────────────────────
   const handleGenerateReport = () => {
@@ -460,7 +472,7 @@ export const ProgressView = ({ setView, stats, library }: ProgressViewProps) => 
             <p className="text-sm font-bold text-amber-900 mb-1">The Ebbinghaus Forgetting Curve</p>
             <p className="text-xs text-amber-800 leading-relaxed">
               Research shows we forget about <span className="font-bold">70% of new information within 24 hours</span>.
-              Klaro schedules your revisions at <span className="font-bold">Day 1, 3, 7, 14, 30</span> to lock concepts in long-term memory.
+              Lumina schedules your revisions at <span className="font-bold">Day 1, 3, 7, 14, 30</span> to lock concepts in long-term memory.
             </p>
           </div>
         </div>
@@ -470,7 +482,7 @@ export const ProgressView = ({ setView, stats, library }: ProgressViewProps) => 
             <Clock size={32} className="text-on-surface-variant/40 mx-auto mb-3" />
             <h4 className="text-lg font-bold text-on-surface mb-1">No revision schedule yet</h4>
             <p className="text-sm text-on-surface-variant font-medium mb-6 max-w-sm mx-auto">
-              Take a quiz on any topic and Klaro will plan your revisions.
+              Take a quiz on any topic and Lumina will plan your revisions.
             </p>
             <button
               onClick={() => setView('dashboard')}

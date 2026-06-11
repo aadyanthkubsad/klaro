@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * Authentication middleware and helpers for Klaro.
+ * Authentication middleware and helpers for Lumina.
  *
  * Uses bcryptjs for password hashing and jsonwebtoken for session tokens.
  * Two middleware variants:
@@ -13,7 +13,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'klaro-dev-secret-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET || 'lumina-dev-secret-change-in-production';
 const JWT_EXPIRY = '7d';
 const SALT_ROUNDS = 10;
 

@@ -5,7 +5,7 @@
  * YouTubeStudyView — "Studied from YouTube? Test yourself here."
  *
  * Pro feature. Students enter the video topic and optionally paste
- * the transcript/notes. Klaro generates a full recall kit: summary,
+ * the transcript/notes. Lumina generates a full recall kit: summary,
  * key points, flashcards, 5-question quiz, weak-topic tags, and a
  * spaced revision task.
  *
@@ -610,7 +610,7 @@ export const YouTubeStudyView = ({
           Studied from YouTube? Test yourself here.
         </h1>
         <p className="text-on-surface-variant font-medium max-w-lg mx-auto">
-          Enter the video topic and paste the transcript. Klaro will turn it into a recall quiz, flashcards, and revision plan.
+          Enter the video topic and paste the transcript. Lumina will turn it into a recall quiz, flashcards, and revision plan.
         </p>
         {!isPro && (
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-100 text-indigo-800 text-[10px] font-black uppercase tracking-widest">

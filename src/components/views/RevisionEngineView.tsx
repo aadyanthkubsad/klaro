@@ -106,7 +106,7 @@ export const RevisionEngineView = ({ setView, kit, saveMistake, saveQuizScore, s
               <div className="bg-indigo-50/50 p-8 rounded-[32px] border border-indigo-100">
                 <h3 className="text-xl font-bold mb-4 flex items-center gap-3 text-indigo-900"><List className="text-indigo-500"/> Key Points</h3>
                 <ul className="space-y-3">
-                  {kit.keyPoints.map((kp: string, i: number) => (
+                  {(kit.keyPoints || []).map((kp: string, i: number) => (
                     <li key={i} className="flex gap-3 text-indigo-800 font-medium"><div className="w-2 h-2 mt-2 rounded-full bg-indigo-400 shrink-0"/>{kp}</li>
                   ))}
                 </ul>
@@ -115,7 +115,7 @@ export const RevisionEngineView = ({ setView, kit, saveMistake, saveQuizScore, s
               <div className="bg-teal-50/50 p-8 rounded-[32px] border border-teal-100">
                 <h3 className="text-xl font-bold mb-4 flex items-center gap-3 text-teal-900"><Key className="text-teal-500"/> Important Definitions</h3>
                 <div className="space-y-4">
-                  {kit.definitions.map((def: any, i: number) => (
+                  {(kit.definitions || []).map((def: any, i: number) => (
                     <div key={i} className="bg-white p-4 rounded-2xl border border-teal-100/50 shadow-sm">
                       <span className="font-black text-teal-800 tracking-wide">{def.term}:</span>
                       <span className="ml-2 text-teal-900/80 font-medium">{def.definition}</span>
@@ -128,7 +128,7 @@ export const RevisionEngineView = ({ setView, kit, saveMistake, saveQuizScore, s
                 <div className="absolute -right-10 -top-10 opacity-10"><Maximize2 size={200} /></div>
                 <h3 className="text-xl font-bold mb-6 flex items-center gap-3 relative z-10">Mind Map Structure</h3>
                 <div className="space-y-4 relative z-10 flex flex-wrap gap-4">
-                  {kit.mindMap.map((node: any, i: number) => (
+                  {(kit.mindMap || []).map((node: any, i: number) => (
                     <div key={i} className="bg-white/10 p-4 rounded-2xl border border-white/20 flex flex-col hover:bg-white/20 transition-all">
                       <span className="font-bold">{node.node}</span>
                       <div className="flex items-center gap-2 mt-2 text-white/50 text-xs font-bold uppercase">
@@ -142,45 +142,47 @@ export const RevisionEngineView = ({ setView, kit, saveMistake, saveQuizScore, s
             </div>
           )}
 
-          {activeTab === 'flashcards' && (
+          {activeTab === 'flashcards' && (kit.flashcards?.length > 0 ? (
             <div className="flex flex-col items-center py-10">
-              <div 
+              <div
                 onClick={() => setIsFlipped(!isFlipped)}
-                style={{ perspective: '1000px' }} 
+                style={{ perspective: '1000px' }}
                 className="w-full max-w-lg aspect-[4/3] cursor-pointer"
               >
-                <div 
-                  className="w-full h-full relative transition-all duration-500" 
+                <div
+                  className="w-full h-full relative transition-all duration-500"
                   style={{ transformStyle: 'preserve-3d', transform: isFlipped ? 'rotateY(180deg)' : '' }}
                 >
                   <div className="absolute inset-0 bg-white border-2 border-surface-container rounded-[40px] shadow-xl flex flex-col items-center justify-center p-12 text-center" style={{ backfaceVisibility: 'hidden' }}>
                     <span className="absolute top-8 text-xs font-bold text-outline uppercase tracking-widest">Question {flashcardIndex + 1} of {kit.flashcards.length}</span>
-                    <h3 className="text-2xl font-black text-on-surface leading-snug">{kit.flashcards[flashcardIndex].front}</h3>
+                    <h3 className="text-2xl font-black text-on-surface leading-snug">{kit.flashcards[flashcardIndex]?.front}</h3>
                     <div className="absolute bottom-8 flex gap-2 items-center text-primary text-xs font-bold uppercase"><RotateCcw size={14}/> Tap to flip</div>
                   </div>
                   <div className="absolute inset-0 bg-primary border-2 border-primary-dark rounded-[40px] shadow-xl flex flex-col items-center justify-center p-12 text-center text-white" style={{ backfaceVisibility: 'hidden', transform: 'rotateY(180deg)' }}>
-                    <h3 className="text-2xl font-bold leading-relaxed">{kit.flashcards[flashcardIndex].back}</h3>
+                    <h3 className="text-2xl font-bold leading-relaxed">{kit.flashcards[flashcardIndex]?.back}</h3>
                   </div>
                 </div>
               </div>
               <div className="flex gap-4 mt-8">
-                <button 
+                <button
                   onClick={() => { setFlashcardIndex(Math.max(0, flashcardIndex - 1)); setIsFlipped(false); }}
                   disabled={flashcardIndex === 0}
                   className="px-6 py-3 bg-surface-container rounded-xl font-bold disabled:opacity-50"
                 >Prev</button>
-                <button 
+                <button
                   onClick={() => { setFlashcardIndex(Math.min(kit.flashcards.length - 1, flashcardIndex + 1)); setIsFlipped(false); }}
                   disabled={flashcardIndex === kit.flashcards.length - 1}
                   className="px-6 py-3 bg-primary text-white rounded-xl font-bold disabled:opacity-50"
                 >Next</button>
               </div>
             </div>
-          )}
+          ) : (
+            <p className="text-center py-10 text-on-surface-variant">No flashcards available for this kit.</p>
+          ))}
 
           {activeTab === 'mcq' && (
             <div className="space-y-12">
-              {kit.mcqs.map((q: any, i: number) => {
+              {(kit.mcqs || []).map((q: any, i: number) => {
                 const selected = mcqAnswers[i];
                 const isCorrect = selected === q.answer || selected?.startsWith(q.answer) || q.answer?.startsWith(selected);
                 
@@ -260,7 +262,7 @@ export const RevisionEngineView = ({ setView, kit, saveMistake, saveQuizScore, s
 
           {activeTab === 'short' && (
             <div className="space-y-8">
-              {kit.shortQuestions.map((q: any, i: number) => (
+              {(kit.shortQuestions || []).map((q: any, i: number) => (
                 <div key={i} className="bg-white p-8 rounded-[32px] border border-surface-container shadow-sm">
                   <h3 className="text-xl font-bold mb-6">{q.question}</h3>
                   <div className="bg-surface-container-lowest p-6 rounded-2xl border border-outline-variant/30">
@@ -278,7 +280,7 @@ export const RevisionEngineView = ({ setView, kit, saveMistake, saveQuizScore, s
           <div className="bg-rose-50/50 p-6 rounded-[32px] border border-rose-100">
             <h4 className="font-black text-rose-900 flex items-center gap-2 mb-4"><AlertTriangle size={18} /> Common Traps</h4>
             <ul className="space-y-3">
-              {kit.commonMistakes.map((m: string, i: number) => (
+              {(kit.commonMistakes || []).map((m: string, i: number) => (
                 <li key={i} className="text-rose-800 text-sm font-medium flex gap-2"><div className="mt-1 w-1.5 h-1.5 rounded-full bg-rose-400 shrink-0"/>{m}</li>
               ))}
             </ul>
@@ -287,7 +289,7 @@ export const RevisionEngineView = ({ setView, kit, saveMistake, saveQuizScore, s
           <div className="bg-surface-container-lowest p-6 rounded-[32px] border border-surface-container">
             <h4 className="font-bold text-on-surface mb-4">Focus Areas</h4>
             <div className="flex flex-wrap gap-2">
-              {kit.weakTopicTags.map((tag: string, i: number) => (
+              {(kit.weakTopicTags || []).map((tag: string, i: number) => (
                 <span key={i} className="px-3 py-1.5 bg-surface-container rounded-lg text-xs font-bold text-on-surface-variant uppercase tracking-wide">{tag}</span>
               ))}
             </div>

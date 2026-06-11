@@ -11,7 +11,7 @@ let pushTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingKeys: Set<string> = new Set();
 
 function getToken(): string | null {
-  try { return localStorage.getItem('klaro:auth-token'); } catch { return null; }
+  try { return localStorage.getItem('lumina:auth-token'); } catch { return null; }
 }
 
 async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
@@ -61,13 +61,13 @@ export async function pullFromServer(): Promise<void> {
     }
 
     if (d.activityLog?.length) {
-      const local = readLocal('klaro:activityLog', []);
+      const local = readLocal('lumina:activityLog', []);
       const merged = mergeById(local, d.activityLog.map(mapActivityFromServer));
-      writeLocal('klaro:activityLog', merged);
+      writeLocal('lumina:activityLog', merged);
     }
 
     if (d.streak) {
-      writeLocal('klaro:streak', {
+      writeLocal('lumina:streak', {
         current: d.streak.current_streak,
         longest: d.streak.longest_streak,
         lastActiveDate: d.streak.last_active_date,
@@ -76,15 +76,15 @@ export async function pullFromServer(): Promise<void> {
     }
 
     if (d.plannerEvents?.length) {
-      const local = readLocal('klaro:examDates', []);
+      const local = readLocal('lumina:examDates', []);
       const merged = mergeById(local, d.plannerEvents.map(mapPlannerFromServer));
-      writeLocal('klaro:examDates', merged);
+      writeLocal('lumina:examDates', merged);
     }
 
     if (d.writtenAnswers?.length) {
-      const local = readLocal('klaro:writtenAnswers', []);
+      const local = readLocal('lumina:writtenAnswers', []);
       const merged = mergeById(local, d.writtenAnswers.map(mapWrittenFromServer));
-      writeLocal('klaro:writtenAnswers', merged);
+      writeLocal('lumina:writtenAnswers', merged);
     }
   } catch {
     // Silent — sync is best-effort
@@ -117,20 +117,20 @@ async function executePush(): Promise<void> {
   if (keys.has('varkify:dailyTasks')) {
     body.dailyTasks = readLocal('varkify:dailyTasks', []);
   }
-  if (keys.has('klaro:activityLog')) {
-    body.activityLog = readLocal('klaro:activityLog', []);
+  if (keys.has('lumina:activityLog')) {
+    body.activityLog = readLocal('lumina:activityLog', []);
   }
-  if (keys.has('klaro:streak')) {
-    body.streak = readLocal('klaro:streak', {});
+  if (keys.has('lumina:streak')) {
+    body.streak = readLocal('lumina:streak', {});
   }
-  if (keys.has('klaro:examDates')) {
-    body.plannerEvents = readLocal('klaro:examDates', []);
+  if (keys.has('lumina:examDates')) {
+    body.plannerEvents = readLocal('lumina:examDates', []);
   }
-  if (keys.has('klaro:writtenAnswers')) {
-    body.writtenAnswers = readLocal('klaro:writtenAnswers', []);
+  if (keys.has('lumina:writtenAnswers')) {
+    body.writtenAnswers = readLocal('lumina:writtenAnswers', []);
   }
-  if (keys.has('klaro:usage')) {
-    const counters = readLocal('klaro:usage', {} as any);
+  if (keys.has('lumina:usage')) {
+    const counters = readLocal('lumina:usage', {} as any);
     const date = counters.dailyResetDate || new Date().toISOString().slice(0, 10);
     body.usageCounters = [
       { date, type: 'kitsGeneratedToday', value: counters.kitsGeneratedToday || 0 },

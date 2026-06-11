@@ -12,7 +12,7 @@ export const RoadmapView = () => {
     { feature: 'Revision Kit', user: 10, retention: 9, complexity: 5, roi: 'Critical' },
     { feature: 'Quiz Generator', user: 10, retention: 8, complexity: 6, roi: 'Critical' },
     { feature: 'Weak Topic Tracker', user: 9, retention: 10, complexity: 6, roi: 'Critical' },
-    { feature: 'Klaro AI', user: 9, retention: 9, complexity: 7, roi: 'High' },
+    { feature: 'Lumina AI', user: 9, retention: 9, complexity: 7, roi: 'High' },
     { feature: 'Mistakes Notebook', user: 8, retention: 10, complexity: 4, roi: 'High' },
     { feature: 'Audio Summary', user: 7, retention: 6, complexity: 6, roi: 'Medium' },
   ];
@@ -51,7 +51,7 @@ export const RoadmapView = () => {
         { name: 'Audio Summary Mode', status: 'completed', desc: 'Aural Hub experience' },
         { name: 'Streaks / XP', status: 'completed', desc: 'Retention booster' },
         { name: 'Share Results', status: 'completed', desc: 'Referral growth' },
-        { name: 'Doubt Solver Chat', status: 'completed', desc: 'Klaro AI' }
+        { name: 'Doubt Solver Chat', status: 'completed', desc: 'Lumina AI' }
       ]
     }
   ];

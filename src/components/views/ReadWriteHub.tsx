@@ -7,17 +7,18 @@
  * Layout (top → bottom):
  *   1. Header — title + consistent action buttons (matching Visual/Audio)
  *   2. Grid  Main (col-7)                        | Sidebar (col-5)
- *            └─ Study Workspace (StudyNotesPanel) | Exam Answer Practice
- *   3. Key Vocabulary (full width)
+ *            └─ Study Workspace (StudyNotesPanel) | Exam Answer Practice (sticky)
+ *                                                 | Key Vocabulary carousel
+ *   3. Formula/Key Reference Table (full width)
  *   4. Tips and Suggestions + External References (side by side)
  */
 
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useCallback } from 'react';
 import {
   Library, ClipboardCheck, RotateCcw, Download, Sparkles, FileText,
-  Lightbulb, Edit3, Type, ExternalLink,
+  Lightbulb, Edit3, Type, ExternalLink, RefreshCw,
   Send, CheckCircle, AlertTriangle, Loader2,
-  X, Eye, ChevronDown, ChevronUp, BookOpen, Target, Zap,
+  X, Eye, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, BookOpen, Target, Zap,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { exportKitToPDF, setLastLearningMode } from '../../lib/pdfExport';
@@ -26,6 +27,7 @@ import { aiService } from '../../services/aiService';
 
 import { UserStats, GeneratedNotes, PlanType, ExamAnswerFeedback } from '../../types';
 import { recordWrittenAnswer } from '../../services/learningService';
+import { getChapterContext } from '../../data/cbseChapterContext';
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
@@ -96,6 +98,193 @@ const FormattedText: React.FC<{ text: string }> = ({ text }) => {
   );
 };
 
+// ─── Vocabulary text cleaner ─────────────────────────────────────────────────
+/** Strip ANSI escape codes, Unicode junk, LaTeX, markdown — anything that
+ *  renders as □ boxes or garbled text in the browser. */
+function cleanVocabText(raw: string): string {
+  if (!raw) return '';
+  let t = raw;
+  // 1. ANSI escape codes: ESC[...m  (the □[1m / □[0m boxes)
+  //    ESC can be \x1b, , or the literal □ char (U+FFFD or raw 0x1B)
+  // eslint-disable-next-line no-control-regex
+  t = t.replace(/(?:\x1b||)?\[[\d;]*[A-Za-z]/g, '');
+  // Also catch the visible "□[1m" / "□[0m" pattern (ESC rendered as box)
+  t = t.replace(/□\[\d*m/g, '');
+  // And raw control chars (0x00-0x1F except \n \r \t)
+  // eslint-disable-next-line no-control-regex
+  t = t.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+  // 2. Unicode replacement char and zero-width chars
+  t = t.replace(/[�​‌‍﻿�]/g, '');
+  // 3. Stray LaTeX delimiters: \[ \] \( \)
+  t = t.replace(/\\[\[\]()]/g, '');
+  // 4. Markdown bold/italic/code
+  t = t.replace(/\*\*(.+?)\*\*/g, '$1');
+  t = t.replace(/\*(.+?)\*/g, '$1');
+  t = t.replace(/__(.+?)__/g, '$1');
+  t = t.replace(/_(.+?)_/g, '$1');
+  t = t.replace(/`([^`]+)`/g, '$1');
+  // 5. Orphaned backslash commands (\Delta → Delta)
+  t = t.replace(/\\([A-Za-z]+)/g, '$1');
+  // 6. Collapse spaces
+  t = t.replace(/\s{2,}/g, ' ');
+  return t.trim();
+}
+
+// ─── Formula Carousel (paginated table slideshow) ────────────────────────────
+
+const FORMULAS_PER_PAGE = 4;
+
+const FormulaCarousel: React.FC<{ formulas: any[]; subject: string }> = ({ formulas, subject }) => {
+  const [page, setPage] = useState(0);
+  const totalPages = Math.ceil(formulas.length / FORMULAS_PER_PAGE);
+  const start = page * FORMULAS_PER_PAGE;
+  const visible = formulas.slice(start, start + FORMULAS_PER_PAGE);
+  const canPrev = totalPages > 1;
+  const canNext = totalPages > 1;
+
+  const isScienceMath = ['physics', 'chemistry', 'science', 'mathematics', 'maths'].includes((subject || '').toLowerCase());
+  const isSocialScience = ['history', 'geography', 'civics', 'social science'].includes((subject || '').toLowerCase());
+  const isCommerce = ['accountancy', 'business studies', 'economics'].includes((subject || '').toLowerCase());
+
+  const headerLabel = isScienceMath ? 'Formula Reference' : isSocialScience ? 'Key Dates & Facts' : isCommerce ? 'Key Terms & Rules' : 'Quick Reference';
+  const col1 = isSocialScience ? 'Event / Fact' : 'Name';
+  const col2 = isScienceMath ? 'Formula / Expression' : isSocialScience ? 'Date / Detail' : 'Rule / Keyword';
+  const col3 = isScienceMath ? 'Units / Exam Tip' : 'Notes';
+
+  return (
+    <div className="mt-6">
+      <div className="bg-white border border-surface-container-high rounded-2xl overflow-hidden card-shadow">
+        {/* Header */}
+        <div className="px-4 sm:px-5 py-3 sm:py-3.5 bg-emerald-600 flex items-center gap-2 sm:gap-3">
+          <FileText size={18} className="text-white shrink-0" />
+          <h3 className="text-xs sm:text-sm font-black text-white truncate">{headerLabel}</h3>
+          <span className="ml-auto px-2 py-0.5 bg-emerald-500 text-white rounded-md text-[10px] font-black shrink-0">{formulas.length} formulas</span>
+        </div>
+
+        {/* Carousel body with side arrows */}
+        <div className="relative">
+          {/* Left arrow — always visible */}
+          <button
+            onClick={() => canPrev && setPage(p => (p - 1 + totalPages) % totalPages)}
+            className={`absolute left-1 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full flex items-center justify-center shadow-lg transition-all ${canPrev ? 'bg-emerald-600 text-white hover:bg-emerald-700 cursor-pointer' : 'bg-emerald-200 text-emerald-400 cursor-default'}`}
+          >
+            <ChevronLeft size={16} />
+          </button>
+
+          {/* Right arrow — always visible */}
+          <button
+            onClick={() => canNext && setPage(p => (p + 1) % totalPages)}
+            className={`absolute right-1 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full flex items-center justify-center shadow-lg transition-all ${canNext ? 'bg-emerald-600 text-white hover:bg-emerald-700 cursor-pointer' : 'bg-emerald-200 text-emerald-400 cursor-default'}`}
+          >
+            <ChevronRight size={16} />
+          </button>
+
+          <div className="p-2 sm:p-4 px-10 sm:px-12">
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={page}
+                initial={{ opacity: 0, x: 60 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -60 }}
+                transition={{ duration: 0.25 }}
+                className="overflow-x-auto"
+              >
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-emerald-50 border-b-2 border-emerald-200">
+                      <th className="px-2 sm:px-3 py-2 text-left text-[10px] font-black uppercase tracking-wider text-emerald-700">{col1}</th>
+                      <th className="px-2 sm:px-3 py-2 text-left text-[10px] font-black uppercase tracking-wider text-emerald-700">{col2}</th>
+                      <th className="px-2 sm:px-3 py-2 text-left text-[10px] font-black uppercase tracking-wider text-emerald-700 hidden sm:table-cell">{col3}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visible.map((row: any, i: number) => (
+                      <tr key={i} className={`border-b border-surface-container-high ${i % 2 === 0 ? 'bg-white' : 'bg-emerald-50/30'}`}>
+                        <td className="px-2 sm:px-3 py-2 text-xs font-bold text-on-surface">{row.name}</td>
+                        <td className="px-2 sm:px-3 py-2 text-xs text-on-surface font-mono font-semibold break-all">{row.formula}</td>
+                        <td className="px-2 sm:px-3 py-2 text-xs text-on-surface-variant leading-relaxed hidden sm:table-cell">{row.notes}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </motion.div>
+            </AnimatePresence>
+          </div>
+        </div>
+
+        {/* Dot indicators + page counter — always visible */}
+        <div className="flex items-center justify-center gap-2 pb-3 border-t border-surface-container-high pt-2 mx-4">
+          <div className="flex gap-1.5 items-center">
+            {Array.from({ length: totalPages }).map((_, i) => (
+              <button
+                key={i}
+                onClick={() => setPage(i)}
+                className={`w-2.5 h-2.5 rounded-full transition-all ${i === page ? 'bg-emerald-500 scale-110' : 'bg-emerald-200 hover:bg-emerald-300'}`}
+              />
+            ))}
+          </div>
+          <span className="text-[10px] text-emerald-600 font-bold ml-2">{page + 1} / {totalPages}</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── Vocabulary Carousel (compact slideshow) ─────────────────────────────────
+
+const VocabCarousel: React.FC<{ vocab: any[] }> = ({ vocab }) => {
+  const [idx, setIdx] = useState(0);
+  const [flipped, setFlipped] = useState(false);
+  const v = vocab[idx];
+  const prev = () => { setIdx(i => (i - 1 + vocab.length) % vocab.length); setFlipped(false); };
+  const next = () => { setIdx(i => (i + 1) % vocab.length); setFlipped(false); };
+
+  return (
+    <div className="flex flex-col items-center gap-3 h-full">
+      <div className="w-full perspective-1000 flex-1 flex flex-col">
+        <div
+          onClick={() => setFlipped(!flipped)}
+          className="relative w-full min-h-[160px] cursor-pointer preserve-3d transition-transform duration-500 flex-1"
+          style={{ transform: flipped ? 'rotateY(180deg)' : 'rotateY(0deg)' }}
+        >
+          <div className="absolute inset-0 backface-hidden rounded-xl border-2 border-sky-300 bg-gradient-to-br from-sky-50 to-sky-100 p-5 flex flex-col items-center justify-center text-center shadow-sm">
+            <p className="text-[10px] font-black uppercase tracking-widest text-sky-400 mb-2">Term {idx + 1} / {vocab.length}</p>
+            <p className="text-xl font-black text-sky-700">{cleanVocabText(v.word || v.term)}</p>
+            <p className="text-[10px] text-sky-500 font-medium mt-3">Tap to reveal definition</p>
+          </div>
+          <div className="absolute inset-0 backface-hidden rounded-xl border-2 border-sky-300 bg-gradient-to-br from-sky-600 to-sky-700 p-5 flex flex-col items-center justify-center text-center shadow-sm"
+            style={{ transform: 'rotateY(180deg)' }}
+          >
+            <p className="text-[10px] font-black uppercase tracking-widest text-sky-200 mb-2">Definition</p>
+            <p className="text-sm font-semibold text-white leading-relaxed">{cleanVocabText(v.definition || v.def || v.meaning)}</p>
+            <p className="text-[9px] text-sky-200 font-medium mt-3 border-t border-sky-500 pt-2">
+              {cleanVocabText(v.examUse || v.usage || 'Often asked as a 1-mark "Define" question.')}
+            </p>
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center gap-3">
+        <button onClick={prev} className="w-7 h-7 rounded-full border-2 border-sky-200 flex items-center justify-center text-sky-600 hover:bg-sky-50 hover:border-sky-400 transition-all">
+          <ChevronLeft size={14} />
+        </button>
+        <div className="flex gap-1">
+          {vocab.slice(0, Math.min(vocab.length, 8)).map((_, i) => (
+            <button
+              key={i}
+              onClick={() => { setIdx(i); setFlipped(false); }}
+              className={`w-1.5 h-1.5 rounded-full transition-all ${i === idx ? 'bg-sky-500 scale-125' : 'bg-sky-200'}`}
+            />
+          ))}
+          {vocab.length > 8 && <span className="text-[8px] text-sky-400 ml-0.5">+{vocab.length - 8}</span>}
+        </div>
+        <button onClick={next} className="w-7 h-7 rounded-full border-2 border-sky-200 flex items-center justify-center text-sky-600 hover:bg-sky-50 hover:border-sky-400 transition-all">
+          <ChevronRight size={14} />
+        </button>
+      </div>
+    </div>
+  );
+};
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export const ReadWriteHub = ({
@@ -103,13 +292,22 @@ export const ReadWriteHub = ({
   saveMistake, openFlashcards, onPaywall,
 }: ReadWriteHubProps) => {
 
+  // ── No kit loaded guard ─────────────────────────────────────────────────
+  if (!kit) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-6">
+        <div className="w-16 h-16 rounded-2xl bg-teal-100 flex items-center justify-center mb-4">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-teal-600"><path d="M12 9v4m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
+        </div>
+        <h3 className="text-lg font-bold text-on-surface mb-2">No content loaded</h3>
+        <p className="text-sm text-on-surface-variant max-w-sm mb-6">Please select a chapter from the Library first. Notes and study content will be generated for the selected chapter.</p>
+        <button onClick={() => setView('library')} className="px-6 py-3 bg-primary text-white rounded-xl font-bold text-sm hover:brightness-110">Go to Library</button>
+      </div>
+    );
+  }
+
   // ── Data extraction ──────────────────────────────────────────────────────
-  const data = kit || {
-    summary: { text: '', executiveSummary: '', keyPoints: [], keyVocabulary: [] },
-    quiz: { title: 'Topic Mastery', questions: [] },
-    flashcards: { cards: [] },
-    readWrite: { externalReferences: [], tips: [], synthesisPrompt: '' },
-  };
+  const data = kit;
 
   const rwData = data.readWrite || { externalReferences: [], tips: [], synthesisPrompt: '' };
   const vocab = typeof data.summary === 'string'
@@ -123,27 +321,124 @@ export const ReadWriteHub = ({
     : (data.summary?.executiveSummary || data.summary?.text || '');
   const topicTitle = data.quiz?.title || data.title || data.chapterTitle || 'Topic';
   const subject = data.subject || '';
+  const kitClassLevel = data.classLevel || 'Class 10';
+  const kitStream = data.stream || '';
+  const formulaTable = data.formulaTable || [];
 
-  // ── Exam questions derived from kit data ─────────────────────────────────
+  // ── CBSE Previous Year Question-aware exam practice ──────────────────────
+  // Uses PYQ bank from cbseChapterContext when available, with regeneration.
+  // Falls back to template-based questions for chapters without PYQ data.
+  const [questionSeed, setQuestionSeed] = useState(0);
+
+  /** Pick a random item from an array using a seed-based index. */
+  const pickFromBank = useCallback((bank: string[], seed: number): string => {
+    if (bank.length === 0) return '';
+    return bank[seed % bank.length];
+  }, []);
+
+  const chapterCtx = useMemo(() =>
+    getChapterContext(topicTitle, data?.subject, data?.classLevel),
+    [topicTitle, data?.subject, data?.classLevel]
+  );
+
+  const isEnglish = (data?.subject || '').toLowerCase() === 'english';
+  const isHindi = ['hindi', 'हिंदी', 'हिन्दी'].includes((data?.subject || '').toLowerCase());
+
   const examQuestions = useMemo(() => {
+    const pyq = chapterCtx?.pyqBank;
     const defs = vocab;
-    const oneMarkQ = defs.length > 0
-      ? `Define "${defs[0].word || defs[0].term}".`
-      : `State one key fact about ${topicTitle}.`;
+    const subjectLC = (data?.subject || '').toLowerCase();
+    const isScience = ['science', 'physics', 'chemistry', 'biology'].includes(subjectLC);
+    const isMaths = ['mathematics', 'maths'].includes(subjectLC);
+    const isCommerce = ['accountancy', 'business studies', 'economics'].includes(subjectLC);
+    const isEnglish = subjectLC === 'english';
+    const isHindi = ['hindi', 'हिंदी', 'हिन्दी'].includes(subjectLC);
+    const term0 = defs[0]?.word || defs[0]?.term || '';
+    const term1 = defs[1]?.word || defs[1]?.term || '';
 
-    const threeMarkQ = keyPoints.length > 1
-      ? `Explain the following with an example: "${keyPoints[1]}"`
-      : `Describe three key features of ${topicTitle}.`;
+    // Use PYQ bank when available, otherwise fall back to templates.
+    // Each seed value produces a different question from the bank.
+    const oneMarkQ = pyq?.oneMark?.length
+      ? pickFromBank(pyq.oneMark, questionSeed)
+      : isScience
+        ? (term0 ? `State the SI unit and dimensional formula of "${term0}".` : `State one key principle related to ${topicTitle} with its SI unit.`)
+        : isMaths
+          ? (keyPoints.length > 0 ? `Write the mathematical expression/formula for: ${keyPoints[0]}.` : `State the formula for ${topicTitle}.`)
+          : isCommerce
+            ? (term0 ? `Define "${term0}" as per NCERT in one sentence.` : `State one key term related to ${topicTitle}.`)
+            : isEnglish
+              ? (term0 ? `Define "${term0}".` : `What is the central theme of "${topicTitle}"? Answer in one sentence.`)
+              : isHindi
+                ? (term0 ? `"${term0}" शब्द का अर्थ लिखिए।` : `"${topicTitle}" पाठ का मूल विषय एक वाक्य में लिखिए।`)
+                : (term0 ? `Define "${term0}".` : `State one key principle related to ${topicTitle}.`);
 
-    const fiveMarkQ = rwData.synthesisPrompt
-      || `Explain ${topicTitle} in detail. Include definitions, key concepts, and real-world applications.`;
+    const twoMarkQ = pyq?.twoMark?.length
+      ? pickFromBank(pyq.twoMark, questionSeed)
+      : isEnglish
+        ? (defs.length > 1
+          ? `Distinguish between "${term0}" and "${term1}". Give one example of each.`
+          : `What message does the author convey in "${topicTitle}"? Support your answer with one reference from the text.`)
+        : isHindi
+          ? (defs.length > 1
+            ? `"${term0}" और "${term1}" में अंतर स्पष्ट कीजिए। प्रत्येक का एक उदाहरण दीजिए।`
+            : `"${topicTitle}" पाठ में लेखक/कवि क्या संदेश देना चाहते हैं? पाठ के आधार पर उत्तर दीजिए।`)
+          : defs.length > 1
+            ? `Distinguish between "${term0}" and "${term1}". Give one example of each.`
+            : keyPoints.length > 0
+              ? `State and explain with an example: "${keyPoints[0]}".`
+              : `Give two characteristics of ${topicTitle} with examples.`;
+
+    const threeMarkQ = pyq?.threeMark?.length
+      ? pickFromBank(pyq.threeMark, questionSeed)
+      : isScience
+        ? (keyPoints.length > 2
+          ? `Derive or prove: "${keyPoints[2]}". Show all steps with proper units and dimensional analysis.`
+          : `A student performs an experiment related to ${topicTitle} and records the following observations. Calculate the result showing step-by-step working with proper units and significant figures.`)
+        : isMaths
+          ? (keyPoints.length > 2 ? `Prove: "${keyPoints[2]}". Show each step clearly.` : `Solve a problem based on ${topicTitle}. Show step-by-step working.`)
+          : isCommerce
+            ? `A business scenario involves ${topicTitle}. Prepare the relevant journal entries / calculations with proper format. Show all workings.`
+            : isEnglish
+              ? `Explain with examples: "European art focuses on realistic depiction and creating an illusion of depth and space.". Support your answer with a specific case or data.`
+              : isHindi
+                ? (keyPoints.length > 1
+                  ? `"${keyPoints[1]}" — इस कथन को "${topicTitle}" पाठ के आधार पर उदाहरण सहित स्पष्ट कीजिए।`
+                  : `"${topicTitle}" पाठ के किन्हीं तीन प्रमुख बिंदुओं को उदाहरण सहित समझाइए।`)
+                : (keyPoints.length > 1
+                  ? `Explain with examples: "${keyPoints[1]}". Support your answer with a specific case or data.`
+                  : `Explain three key aspects of ${topicTitle} with specific examples or data.`);
+
+    const fiveMarkQ = pyq?.fiveMark?.length
+      ? pickFromBank(pyq.fiveMark, questionSeed)
+      : isScience
+        ? `(a) State the key principle/law related to ${topicTitle}. (b) Derive the main formula/expression using this principle. Show all steps. (c) State two limitations of this method or two assumptions made. [2+2+1]`
+        : isMaths
+          ? `(a) State and prove the main theorem/formula related to ${topicTitle}. (b) Using this result, solve: [a numerical of medium difficulty]. (c) State one condition where this result does not apply. [2+2+1]`
+          : isCommerce
+            ? `Read the following case: A company dealing with ${topicTitle} faces a specific situation. (a) Identify the relevant concept and define it. (b) Prepare the required statement/entry/calculation with proper format. (c) State one advantage and one limitation. [2+2+1]`
+            : isEnglish
+              ? `(a) Define the key concepts related to ${topicTitle} with NCERT definitions. (b) Explain with two specific examples or a case study. (c) State any limitations, criticisms, or exceptions. [2+2+1]`
+              : isHindi
+                ? `(क) "${topicTitle}" पाठ के मुख्य विषय/भाव को NCERT के अनुसार परिभाषित कीजिए। (ख) पाठ से दो विशिष्ट उदाहरण देकर समझाइए। (ग) इस पाठ की सीमाओं अथवा आलोचनाओं पर टिप्पणी कीजिए। [2+2+1]`
+                : `(a) Define the key concepts related to ${topicTitle} with NCERT definitions. (b) Explain with two specific examples or a case study. (c) State any limitations, criticisms, or exceptions. [2+2+1]`;
 
     return [
       { marks: 1, question: oneMarkQ },
+      { marks: 2, question: twoMarkQ },
       { marks: 3, question: threeMarkQ },
       { marks: 5, question: fiveMarkQ },
     ];
-  }, [vocab, keyPoints, topicTitle, rwData.synthesisPrompt]);
+  }, [vocab, keyPoints, topicTitle, data?.subject, data?.classLevel, questionSeed, chapterCtx, pickFromBank]);
+
+  const hasPyqBank = !!(chapterCtx?.pyqBank);
+
+  const regenerateQuestions = useCallback(() => {
+    setQuestionSeed(prev => prev + 1);
+    setSelectedExamQ(null);
+    setExamAnswer('');
+    setExamFeedback(null);
+    setExamError(null);
+  }, []);
 
   // ── State ────────────────────────────────────────────────────────────────
   const [selectedExamQ, setSelectedExamQ] = useState<number | null>(null);
@@ -151,7 +446,6 @@ export const ReadWriteHub = ({
   const [examSubmitting, setExamSubmitting] = useState(false);
   const [examFeedback, setExamFeedback] = useState<ExamAnswerFeedback | null>(null);
   const [examError, setExamError] = useState<string | null>(null);
-  const [showAllVocab, setShowAllVocab] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [feedbackTab, setFeedbackTab] = useState<'overview' | 'keywords' | 'model' | 'improve'>('overview');
   const [showFullModelAnswer, setShowFullModelAnswer] = useState(false);
@@ -180,7 +474,7 @@ export const ReadWriteHub = ({
       const fb = await aiService.evaluateAnswer({
         topic: topicTitle,
         subject,
-        classLevel: 'Class 10',
+        classLevel: kitClassLevel,
         examMode: 'CBSE',
         question: q.question,
         studentAnswer: examAnswer,
@@ -230,7 +524,7 @@ export const ReadWriteHub = ({
             Read / Write Mode
           </span>
           <h2 className="text-3xl font-black tracking-tight text-on-surface">{topicTitle}</h2>
-          <p className="text-on-surface-variant mt-1 text-sm font-medium">Exam revision workspace · CBSE Class 10</p>
+          <p className="text-on-surface-variant mt-1 text-sm font-medium">Exam revision workspace · CBSE {kitClassLevel}{kitStream ? ` · ${kitStream}` : ''}{subject ? ` · ${subject}` : ''}</p>
         </div>
 
         {/* ─── Consistent Action Bar (matches Visual/Audio) ───────────── */}
@@ -288,6 +582,11 @@ export const ReadWriteHub = ({
               onPaywall={onPaywall}
             />
           </div>
+
+          {/* ─── Formula / Key Reference Carousel (under notes) ────── */}
+          {formulaTable.length > 0 && (
+            <FormulaCarousel formulas={formulaTable} subject={subject} />
+          )}
         </div>
 
         {/* ─── Right: Exam Answer Practice (40%, compact) ────────── */}
@@ -305,15 +604,21 @@ export const ReadWriteHub = ({
               {/* Question selection */}
               {selectedExamQ === null && !examFeedback && (
                 <div className="space-y-2.5">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant mb-2">Choose a question</p>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Choose a question</p>
+                    {hasPyqBank && (
+                      <span className="px-2 py-0.5 bg-violet-100 text-violet-700 rounded-md text-[9px] font-black uppercase">PYQ Based</span>
+                    )}
+                  </div>
                   {examQuestions.map((q, i) => (
                     <button
-                      key={i}
+                      key={`${questionSeed}-${i}`}
                       onClick={() => { setSelectedExamQ(i); setExamAnswer(''); setExamFeedback(null); }}
                       className="w-full text-left p-3 rounded-xl border-2 border-surface-container-high hover:border-violet-400 hover:shadow-md transition-all group"
                     >
                       <span className={`inline-block px-2 py-0.5 rounded-md text-[10px] font-black uppercase mb-1.5 ${
                         q.marks === 1 ? 'bg-green-100 text-green-700' :
+                        q.marks === 2 ? 'bg-blue-100 text-blue-700' :
                         q.marks === 3 ? 'bg-amber-100 text-amber-700' :
                         'bg-rose-100 text-rose-700'
                       }`}>
@@ -322,6 +627,17 @@ export const ReadWriteHub = ({
                       <p className="text-xs text-on-surface font-semibold group-hover:text-violet-700 transition-colors leading-relaxed">{q.question}</p>
                     </button>
                   ))}
+
+                  {/* Regenerate button */}
+                  <button
+                    onClick={regenerateQuestions}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 mt-1 rounded-xl border-2 border-dashed border-violet-300 text-violet-600 hover:bg-violet-50 hover:border-violet-400 transition-all"
+                  >
+                    <RefreshCw size={14} />
+                    <span className="text-xs font-black uppercase tracking-wider">
+                      {hasPyqBank ? 'New PYQ Questions' : 'Regenerate Questions'}
+                    </span>
+                  </button>
                 </div>
               )}
 
@@ -346,7 +662,7 @@ export const ReadWriteHub = ({
                   <textarea
                     value={examAnswer}
                     onChange={e => setExamAnswer(e.target.value)}
-                    placeholder="Type your exam answer here. Klaro will check your keywords, accuracy, and marks."
+                    placeholder="Type your exam answer here. Lumina will check your keywords, accuracy, and marks."
                     className="w-full h-36 p-3 border-2 border-surface-container-high rounded-xl text-xs text-on-surface leading-relaxed resize-none focus:outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100 transition-all font-medium placeholder:text-on-surface-variant/40"
                     autoFocus
                   />
@@ -419,49 +735,31 @@ export const ReadWriteHub = ({
                   >
                     Try Another Question
                   </button>
+                  <button
+                    onClick={regenerateQuestions}
+                    className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-violet-500 text-[10px] font-bold uppercase tracking-wider hover:text-violet-700 transition-all"
+                  >
+                    <RefreshCw size={11} />
+                    {hasPyqBank ? 'New PYQ Set' : 'New Questions'}
+                  </button>
                 </div>
               )}
             </div>
-          </div>
-        </div>
-      </div>
 
-      {/* ─── Key Vocabulary (full width below two-column area) ────────── */}
-      <div ref={vocabRef} className="scroll-mt-20 mt-6 bg-white border border-surface-container-high rounded-2xl overflow-hidden card-shadow">
-        <div className="px-5 py-3.5 bg-sky-600 flex items-center gap-3">
-          <Type size={18} className="text-white" />
-          <h3 className="text-sm font-black text-white">Key Vocabulary</h3>
+          </div>
+
+          {/* ─── Key Vocabulary — below Exam Answer Practice ─────── */}
           {vocab.length > 0 && (
-            <span className="ml-auto px-2 py-0.5 bg-sky-500 text-white rounded-md text-[10px] font-black">{vocab.length} terms</span>
-          )}
-        </div>
-        <div className="p-4">
-          {vocab.length > 0 ? (
-            <>
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                {(showAllVocab ? vocab : vocab.slice(0, 6)).map((v: any, i: number) => (
-                  <div key={i} className="p-3 rounded-lg border border-sky-100 bg-sky-50/30">
-                    <p className="text-sm font-black text-sky-700">{v.word || v.term}</p>
-                    <p className="text-xs text-on-surface leading-relaxed mt-0.5">{v.definition || v.def || v.meaning}</p>
-                    <p className="text-[10px] text-sky-500 mt-1 font-medium">
-                      {v.examUse || v.usage || 'Often asked as a 1-mark "Define" question.'}
-                    </p>
-                  </div>
-                ))}
+            <div ref={vocabRef} className="mt-4 bg-white border border-surface-container-high rounded-2xl overflow-hidden card-shadow">
+              <div className="px-4 py-3 bg-sky-600 flex items-center gap-2">
+                <Type size={16} className="text-white" />
+                <h3 className="text-xs sm:text-sm font-black text-white">Key Vocabulary</h3>
+                <span className="ml-auto px-2 py-0.5 bg-sky-500 text-white rounded-md text-[9px] font-black">{vocab.length} terms</span>
               </div>
-              {vocab.length > 6 && !showAllVocab && (
-                <button onClick={() => setShowAllVocab(true)} className="mt-3 w-full py-2 rounded-lg border border-sky-200 text-sky-700 text-xs font-bold hover:bg-sky-50 transition-all">
-                  Show {vocab.length - 6} more terms
-                </button>
-              )}
-              {showAllVocab && vocab.length > 6 && (
-                <button onClick={() => setShowAllVocab(false)} className="mt-3 w-full py-2 rounded-lg border border-sky-200 text-sky-700 text-xs font-bold hover:bg-sky-50 transition-all">
-                  Show less
-                </button>
-              )}
-            </>
-          ) : (
-            <p className="text-xs text-on-surface-variant italic text-center py-4">No vocabulary terms available.</p>
+              <div className="p-3 sm:p-4">
+                <VocabCarousel vocab={vocab} />
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -670,11 +968,23 @@ export const ReadWriteHub = ({
                           <div className="p-3 bg-surface-container-low rounded-lg border border-surface-container">
                             <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant mb-1.5">CBSE Answer Structure</p>
                             <div className="flex flex-wrap gap-2 mt-1">
-                              {(examQuestions[selectedExamQ].marks === 1
-                                ? ['Definition']
-                                : examQuestions[selectedExamQ].marks === 3
-                                  ? ['Definition', 'Explanation', 'Example']
-                                  : ['Definition', 'Explanation', 'Example', 'Diagram Note', 'Conclusion']
+                              {(isEnglish
+                                ? (examQuestions[selectedExamQ].marks === 1
+                                  ? ['Key Term / Theme']
+                                  : examQuestions[selectedExamQ].marks <= 3
+                                    ? ['Context / Reference', 'Explanation', 'Textual Evidence']
+                                    : ['Introduction', 'Theme / Character', 'Textual Evidence', 'Literary Device', 'Conclusion'])
+                                : isHindi
+                                  ? (examQuestions[selectedExamQ].marks === 1
+                                    ? ['शब्दार्थ / परिभाषा']
+                                    : examQuestions[selectedExamQ].marks <= 3
+                                      ? ['संदर्भ', 'व्याख्या', 'पाठ से प्रमाण']
+                                      : ['भूमिका', 'विषय / पात्र', 'पाठ से प्रमाण', 'भाषिक विशेषता', 'निष्कर्ष'])
+                                : (examQuestions[selectedExamQ].marks === 1
+                                  ? ['Definition']
+                                  : examQuestions[selectedExamQ].marks === 3
+                                    ? ['Definition', 'Explanation', 'Example']
+                                    : ['Definition', 'Explanation', 'Example', 'Diagram Note', 'Conclusion'])
                               ).map(s => (
                                 <span key={s} className="px-2 py-1 bg-violet-100 text-violet-700 rounded-md text-[10px] font-bold">{s}</span>
                               ))}
