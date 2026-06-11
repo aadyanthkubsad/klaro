@@ -26,19 +26,27 @@ export class ErrorBoundary extends Component<Props, State> {
   public render() {
     if (this.state.hasError) {
       if (this.props.fallback) return this.props.fallback;
+      const isDev = import.meta.env.DEV;
       return (
-        <div style={{ padding: 32, fontFamily: 'monospace', background: '#fff1f2', minHeight: '100vh' }}>
-          <h2 style={{ color: '#e11d48', marginBottom: 12 }}>⚠️ App Crash — Runtime Error</h2>
-          <pre style={{ background: '#fee2e2', padding: 16, borderRadius: 8, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 13, color: '#991b1b' }}>
-            {this.state.error?.message}
-            {'\n\n'}
-            {this.state.error?.stack}
-          </pre>
-          {this.state.info && (
-            <details style={{ marginTop: 16 }}>
-              <summary style={{ cursor: 'pointer', color: '#64748b', fontSize: 12 }}>Component Stack</summary>
-              <pre style={{ fontSize: 11, color: '#64748b', padding: 8, marginTop: 4 }}>{this.state.info}</pre>
-            </details>
+        <div style={{ padding: 32, fontFamily: 'system-ui, sans-serif', background: '#fff1f2', minHeight: '100vh' }}>
+          <h2 style={{ color: '#e11d48', marginBottom: 12 }}>Something went wrong</h2>
+          <p style={{ color: '#64748b', marginBottom: 16 }}>
+            The app hit an unexpected error. Try recovering, or refresh the page.
+          </p>
+          {isDev && (
+            <>
+              <pre style={{ background: '#fee2e2', padding: 16, borderRadius: 8, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 13, color: '#991b1b' }}>
+                {this.state.error?.message}
+                {'\n\n'}
+                {this.state.error?.stack}
+              </pre>
+              {this.state.info && (
+                <details style={{ marginTop: 16 }}>
+                  <summary style={{ cursor: 'pointer', color: '#64748b', fontSize: 12 }}>Component Stack</summary>
+                  <pre style={{ fontSize: 11, color: '#64748b', padding: 8, marginTop: 4 }}>{this.state.info}</pre>
+                </details>
+              )}
+            </>
           )}
           <button
             onClick={() => this.setState({ hasError: false, error: null, info: '' })}

@@ -111,7 +111,7 @@ export function isOwner(): boolean {
   try {
     // Primary: check the email AuthContext stores on login/register/me
     const email = window.localStorage.getItem('lumina:user-email');
-    if (email && OWNER_EMAILS.includes(email)) return true;
+    if (email && OWNER_EMAILS.includes(email.toLowerCase())) return true;
   } catch { /* ignore */ }
   try {
     // Fallback: decode JWT payload (handles URL-safe base64) and self-heal
@@ -124,7 +124,7 @@ export function isOwner(): boolean {
         if (payload.email) {
           window.localStorage.setItem('lumina:user-email', payload.email);
         }
-        if (OWNER_EMAILS.includes(payload.email)) return true;
+        if (payload.email && OWNER_EMAILS.includes(payload.email.toLowerCase())) return true;
       }
     }
   } catch { /* ignore */ }

@@ -183,7 +183,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSkip }) => {
         </div>
 
         <p className="text-center text-[10px] text-on-surface-variant/60 font-medium mt-6">
-          By signing in, you agree to Lumina's Terms of Service.
+          By signing in you agree to Lumina's terms. View our privacy policy in Settings &gt; Privacy.
         </p>
       </motion.div>
     </div>

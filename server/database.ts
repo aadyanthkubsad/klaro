@@ -20,7 +20,7 @@ import fs from 'fs';
 import path from 'path';
 import { logger } from './logger.js';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
 const DB_PATH = path.join(DATA_DIR, 'klaro.db');
 const SCHEMA_PATH = path.join(process.cwd(), 'server', 'schema.sql');
 
@@ -575,4 +575,21 @@ export function upsertWrittenAnswers(userId: string, answers: any[]): void {
     }
   });
   batch();
+}
+
+// ─── Account Deletion (DPDP compliance) ────────────────────────────────────
+
+export function deleteUserData(userId: string): void {
+  const tables = [
+    'stats', 'library_items', 'kits', 'payments', 'sessions',
+    'quiz_attempts', 'mistake_entries', 'mastery_entries', 'daily_tasks',
+    'activity_log', 'usage_counters', 'planner_events', 'written_answers', 'streak_info',
+  ];
+  const deleteAll = db.transaction(() => {
+    for (const table of tables) {
+      db.prepare(`DELETE FROM ${table} WHERE user_id = ?`).run(userId);
+    }
+    db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+  });
+  deleteAll();
 }

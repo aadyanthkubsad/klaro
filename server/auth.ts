@@ -13,7 +13,9 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'lumina-dev-secret-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production'
+  ? (() => { throw new Error('FATAL: JWT_SECRET must be set in production. Generate one with: openssl rand -hex 32'); })()
+  : 'lumina-dev-secret-DO-NOT-USE-IN-PROD');
 const JWT_EXPIRY = '7d';
 const SALT_ROUNDS = 10;
 

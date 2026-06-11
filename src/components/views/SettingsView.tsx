@@ -492,9 +492,23 @@ export const SettingsView = ({ planType = 'free', changePlan, kitsUsedToday = 0,
                   </div>
 
                   {/* Sign out */}
-                  <div className="mt-8 pt-6 border-t border-surface-container">
+                  <div className="mt-8 pt-6 border-t border-surface-container flex items-center justify-between">
                     <button onClick={() => { logout(); }} className="text-sm text-rose-600 font-bold hover:text-rose-700 transition-colors">
                       Sign Out
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (!confirm('This will permanently delete your account and all data. This cannot be undone. Are you sure?')) return;
+                        try {
+                          const token = localStorage.getItem('lumina:auth-token');
+                          const res = await fetch('/api/account', { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+                          if (res.ok) { logout(); alert('Account deleted.'); }
+                          else alert('Failed to delete account. Please try again.');
+                        } catch { alert('Network error. Please try again.'); }
+                      }}
+                      className="text-xs text-on-surface-variant/50 hover:text-rose-600 transition-colors"
+                    >
+                      Delete Account
                     </button>
                   </div>
                 </div>
@@ -555,6 +569,48 @@ export const SettingsView = ({ planType = 'free', changePlan, kitsUsedToday = 0,
                     </select>
                     <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none" size={16} />
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── PRIVACY SECTION ─────────────────────────────────────────── */}
+          {activeSection === 'privacy' && (
+            <div className="bg-white border border-surface-container rounded-[32px] p-8 card-shadow space-y-6">
+              <h3 className="text-xl font-bold">Privacy & Legal</h3>
+              <div className="space-y-4">
+                <div className="p-4 rounded-2xl bg-surface-container-low">
+                  <h4 className="font-bold text-on-surface mb-2">Data We Collect</h4>
+                  <ul className="text-sm text-on-surface-variant space-y-1 list-disc list-inside">
+                    <li>Email address (for account login and password recovery)</li>
+                    <li>Study activity (chapters opened, quizzes taken, notes generated)</li>
+                    <li>Learning preferences (VARK type, class, stream, subjects)</li>
+                  </ul>
+                </div>
+                <div className="p-4 rounded-2xl bg-surface-container-low">
+                  <h4 className="font-bold text-on-surface mb-2">How We Use It</h4>
+                  <p className="text-sm text-on-surface-variant">Your data stays on our servers and is used solely to personalise your learning experience — adaptive quizzes, progress tracking, and AI-generated study material. We do not sell or share your data with third parties.</p>
+                </div>
+                <div className="p-4 rounded-2xl bg-surface-container-low">
+                  <h4 className="font-bold text-on-surface mb-2">Your Rights (DPDP Act 2023)</h4>
+                  <ul className="text-sm text-on-surface-variant space-y-1 list-disc list-inside">
+                    <li>Right to access your personal data</li>
+                    <li>Right to correction of inaccurate data</li>
+                    <li>Right to erasure — delete your account and all associated data</li>
+                    <li>Right to grievance redressal</li>
+                  </ul>
+                </div>
+                <div className="p-4 rounded-2xl bg-surface-container-low">
+                  <h4 className="font-bold text-on-surface mb-2">Third-Party Services</h4>
+                  <ul className="text-sm text-on-surface-variant space-y-1 list-disc list-inside">
+                    <li><strong>Google Gemini AI</strong> — generates study notes, quizzes, and flashcards. Prompts contain chapter topics only, never your personal data.</li>
+                    <li><strong>Sarvam AI</strong> — Hindi text-to-speech for audio study mode. Only chapter text is sent.</li>
+                    <li><strong>Razorpay</strong> — payment processing for Plus/Pro plans. We never store card details.</li>
+                  </ul>
+                </div>
+                <div className="p-4 rounded-2xl bg-surface-container-low">
+                  <h4 className="font-bold text-on-surface mb-2">Contact</h4>
+                  <p className="text-sm text-on-surface-variant">For data requests, corrections, or deletion: <strong>prashanth.kubsad@gmail.com</strong></p>
                 </div>
               </div>
             </div>

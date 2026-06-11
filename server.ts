@@ -5,6 +5,7 @@
 
 import 'dotenv/config';
 import express from 'express';
+import helmet from 'helmet';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { retrieveChunks } from './src/data/syllabusRetrieval.js';
@@ -16,7 +17,7 @@ import { getChapterAudioTarget, describeTarget } from './server/data/chapterWeig
 import { checkRateLimit, cleanupStaleEntries, getUsageStats, type EndpointBucket, type PlanType } from './server/rateLimiter.js';
 import { enqueueAIRequest, configureQueue, getQueueStats } from './server/queue.js';
 import { cacheGet, cacheSet, buildCacheKey, configureCache, getCacheStats, cleanupExpiredCache, cacheInvalidate, cacheInvalidateByPrefix } from './server/cache.js';
-import { initDatabase, flushDatabase, getStats, updateStats, getLibrary, addToLibrary, removeFromLibrary, cleanupLibrary, getKit, saveKit, getOrCreateUser, getUserPlan, incrementUserKitCount, getDatabaseStats, getAllKits, createUser, getUserByEmail, getUserById, updateUserPlan, createPaymentRecord, markPaymentPaid, getPaymentByOrderId, getQuizAttempts, upsertQuizAttempts, getMistakeEntries, upsertMistakeEntries, getMasteryEntries, upsertMasteryEntries, getDailyTasksDb, upsertDailyTasks, getActivityLog, upsertActivityLog, getStreakInfo, upsertStreakInfo, getUsageCountersDb, upsertUsageCounter, getPlannerEventsDb, upsertPlannerEvents, getWrittenAnswersDb, upsertWrittenAnswers, touchLibraryItem, backfillVarkTypes } from './server/database.js';
+import { initDatabase, flushDatabase, getStats, updateStats, getLibrary, addToLibrary, removeFromLibrary, cleanupLibrary, getKit, saveKit, getOrCreateUser, getUserPlan, incrementUserKitCount, getDatabaseStats, getAllKits, createUser, getUserByEmail, getUserById, updateUserPlan, createPaymentRecord, markPaymentPaid, getPaymentByOrderId, getQuizAttempts, upsertQuizAttempts, getMistakeEntries, upsertMistakeEntries, getMasteryEntries, upsertMasteryEntries, getDailyTasksDb, upsertDailyTasks, getActivityLog, upsertActivityLog, getStreakInfo, upsertStreakInfo, getUsageCountersDb, upsertUsageCounter, getPlannerEventsDb, upsertPlannerEvents, getWrittenAnswersDb, upsertWrittenAnswers, touchLibraryItem, backfillVarkTypes, deleteUserData } from './server/database.js';
 import { authMiddleware, requireAuth, hashPassword, verifyPassword, generateToken } from './server/auth.js';
 import { createOrder, verifyPaymentSignature, isRazorpayConfigured, PLAN_PRICES } from './server/payments.js';
 import { verifyChapter, verifyAllChapters, getVerifiedSubjects } from './server/syllabusVerifier.js';
@@ -51,29 +52,18 @@ function logApiKeyStatus() {
   const raw = process.env.GEMINI_API_KEY || '';
   const trimmed = raw.replace(/^["']|["']$/g, '').trim();
   const isPlaceholder = trimmed === '' || trimmed === 'your_api_key_here' || trimmed === 'undefined' || trimmed === 'null';
-  console.log('--------------------------------------------------');
-  console.log('[VARKify] Gemini API key check');
-  console.log('  API key exists:', !isPlaceholder);
-  console.log('  API key length:', trimmed.length);
-  console.log('  Source:         process.env.GEMINI_API_KEY (.env via dotenv)');
+  logger.info('Gemini API key check', { meta: { exists: !isPlaceholder, keyLength: trimmed.length } });
   if (isPlaceholder) {
-    console.log('  ⚠️  Add a real key to .env at the project root, then restart.');
+    logger.warn('Gemini API key missing — add a real key to .env then restart');
   }
-  console.log('--------------------------------------------------');
 }
 
 function logSarvamKeyStatus() {
   const sarvamCheck = validateSarvamConfig();
-  console.log('--------------------------------------------------');
-  console.log('[Lumina] Sarvam TTS key check');
-  console.log('  Configured:', sarvamCheck.ok);
+  logger.info('Sarvam TTS key check', { meta: { configured: sarvamCheck.ok } });
   if (!sarvamCheck.ok) {
-    console.log('  ⚠️  Sarvam TTS disabled. Add SARVAM_API_KEY to .env for AI narration.');
-    console.log('  Fallback: browser speech synthesis will be used.');
-  } else {
-    console.log('  Status: Ready for AI narration');
+    logger.warn('Sarvam TTS disabled — add SARVAM_API_KEY to .env; falling back to browser speech synthesis');
   }
-  console.log('--------------------------------------------------');
 }
 
 async function startServer() {
@@ -86,7 +76,7 @@ async function startServer() {
   // One-time migration: backfill VARK types for legacy 'revision-kit' library items
   const varkBackfilled = backfillVarkTypes();
   if (varkBackfilled > 0) {
-    console.log(`[Lumina] VARK backfill: updated ${varkBackfilled} library items from 'revision-kit' to inferred VARK type.`);
+    logger.info(`VARK backfill: updated ${varkBackfilled} library items`);
   }
 
   // Invalidate cached notes and kits so they regenerate with the new topper's notebook prompt
@@ -94,7 +84,7 @@ async function startServer() {
   const kitsInvalidated = cacheInvalidateByPrefix('generate-kit');
   const totalInvalidated = notesInvalidated + kitsInvalidated;
   if (totalInvalidated > 0) {
-    console.log(`[Lumina] Invalidated ${totalInvalidated} cached entries (${notesInvalidated} notes, ${kitsInvalidated} kits) — prompt updated to topper's notebook style.`);
+    logger.info(`Cache invalidated: ${notesInvalidated} notes, ${kitsInvalidated} kits`);
   }
 
   configureQueue({
@@ -118,8 +108,23 @@ async function startServer() {
   const app = express();
   const PORT = parseInt(process.env.PORT || '3000', 10);
 
-  // Middleware for parsing JSON — 15MB to handle handwritten answer image uploads
-  app.use(express.json({ limit: '15mb' }));
+  // Security headers
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", "https://checkout.razorpay.com"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        fontSrc: ["'self'", "https://fonts.gstatic.com"],
+        imgSrc: ["'self'", "data:", "blob:"],
+        connectSrc: ["'self'", "https://lumberjack-cx.razorpay.com", "https://api.razorpay.com"],
+        frameSrc: ["https://api.razorpay.com"],
+      },
+    },
+  }));
+
+  app.use(express.json({ limit: '1mb' }));
+  const largeBodyParser = express.json({ limit: '15mb' });
 
   // Serve generated audio files (Sarvam TTS output)
   app.use('/generated-audio', express.static(path.join(process.cwd(), 'public', 'generated-audio')));
@@ -163,41 +168,20 @@ async function startServer() {
   app.use(authMiddleware);
 
   // ── Owner override — grant Pro plan to founder emails ──────────────────────
-  // Three detection methods (mirrors client-side billingService.ts isOwner):
-  //   1. JWT email from Authorization header (set by authMiddleware above)
-  //   2. DB lookup — check if any owner email account exists and matches this user
-  //   3. Localhost shortcut — auto-pro for local dev (only on 127.0.0.1/::1)
-  const OWNER_EMAILS = ['prashanth.kubsad@gmail.com', 'kubsadaadyanth@gmail.com'];
+  const OWNER_EMAILS = (process.env.OWNER_EMAILS || 'prashanth.kubsad@gmail.com,kubsadaadyanth@gmail.com')
+    .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
   app.use((req: any, _res: any, next: any) => {
-    // Method 1: JWT email from auth header
-    if (req.userEmail && OWNER_EMAILS.includes(req.userEmail)) {
+    if (req.userEmail && OWNER_EMAILS.includes(req.userEmail.toLowerCase())) {
       req.userPlan = 'pro';
       return next();
     }
-    // Method 2: Check if authenticated userId maps to an owner email in DB
     if (req.userId && req.userId !== 'u-migrated') {
       try {
         const dbUser = getUserById(req.userId);
-        if (dbUser?.email && OWNER_EMAILS.includes(dbUser.email)) {
+        if (dbUser?.email && OWNER_EMAILS.includes(dbUser.email.toLowerCase())) {
           req.userEmail = dbUser.email;
           req.userPlan = 'pro';
           return next();
-        }
-      } catch { /* DB lookup failed — continue */ }
-    }
-    // Method 3: On localhost, check if ANY owner email exists in DB and
-    // auto-grant Pro. This covers the common dev scenario where the
-    // founder is the only person using the local server.
-    const ip = req.clientIp || '';
-    const isLocalhost = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip === 'localhost';
-    if (isLocalhost) {
-      try {
-        for (const ownerEmail of OWNER_EMAILS) {
-          const ownerUser = getUserByEmail(ownerEmail);
-          if (ownerUser) {
-            req.userPlan = 'pro';
-            return next();
-          }
         }
       } catch { /* DB lookup failed — continue */ }
     }
@@ -255,6 +239,17 @@ async function startServer() {
     const user = getUserById(req.userId);
     if (!user) return res.status(404).json({ success: false, error: 'User not found' });
     res.json({ success: true, user: { id: user.id, email: user.email, displayName: user.display_name, planType: user.plan_type } });
+  });
+
+  app.delete('/api/account', requireAuth, (req: any, res) => {
+    try {
+      deleteUserData(req.userId);
+      logger.info('Account deleted', { endpoint: '/api/account', meta: { userId: req.userId } });
+      res.json({ success: true });
+    } catch (err: any) {
+      logger.error('Account deletion failed', { endpoint: '/api/account', meta: { userId: req.userId, error: err.message } });
+      res.status(500).json({ success: false, error: 'Failed to delete account' });
+    }
   });
 
   // ── Payment endpoints ────────────────────────────────────────────────────
@@ -415,12 +410,16 @@ async function startServer() {
     };
   }
 
-  // ── Health Check Endpoint ─────────────────────────────────────────────────
+  // ── Health Check — public liveness probe (no sensitive data) ──────────────
   app.get('/api/health', (_req, res) => {
+    res.json({ status: 'ok', version: SERVER_VERSION, uptime: Math.floor((Date.now() - SERVER_START_TIME) / 1000) });
+  });
+
+  // ── Admin health — full stats, requires auth ────────────────────────────
+  app.get('/api/admin/health', requireAuth, (_req, res) => {
     const raw = process.env.GEMINI_API_KEY || '';
     const trimmed = raw.replace(/^["']|["']$/g, '').trim();
     const geminiConfigured = !!trimmed && trimmed !== 'your_api_key_here' && trimmed !== 'undefined';
-
     res.json({
       status: 'ok',
       version: SERVER_VERSION,
@@ -430,7 +429,6 @@ async function startServer() {
       queue: getQueueStats(),
       cache: getCacheStats(),
       database: getDatabaseStats(),
-      rateLimiter: { note: 'Use GET /api/usage?ip=<IP> for per-user stats' },
     });
   });
 
@@ -453,26 +451,14 @@ async function startServer() {
     }
   });
 
-  // ── Usage stats endpoint ──────────────────────────────────────────────────
-  app.get('/api/usage', (req: any, res) => {
-    const ip = (req.query.ip as string) || req.clientIp;
+  // ── Usage stats endpoint (auth-gated) ─────────────────────────────────────
+  app.get('/api/usage', requireAuth, (req: any, res) => {
+    const ip = req.clientIp;
     res.json({
       success: true,
       clientIp: ip,
       plan: getUserPlan(ip),
       usage: getUsageStats(ip),
-    });
-  });
-
-  // Safe debug endpoint — exposes existence + length only, never the key.
-  app.get("/api/debug-key", (_req, res) => {
-    const raw = process.env.GEMINI_API_KEY || '';
-    const trimmed = raw.replace(/^["']|["']$/g, '').trim();
-    const isPlaceholder = trimmed === '' || trimmed === 'your_api_key_here' || trimmed === 'undefined' || trimmed === 'null';
-    res.json({
-      exists: !isPlaceholder,
-      length: trimmed.length,
-      source: 'process.env.GEMINI_API_KEY',
     });
   });
 
@@ -702,15 +688,15 @@ async function startServer() {
           const canFallback = isTransient || isQuota || isNotFound || isTimeout;
           if ((isTransient || isTimeout || (isQuota && !isDailyQuota)) && attempt === 0) {
             const waitSec = isQuota ? 5 : 2;
-            console.warn(`Gemini ${model} ${isTimeout ? 'timed out' : isQuota ? '429' : '503'}, retrying in ${waitSec}s...`);
+            logger.warn(`Gemini ${model} ${isTimeout ? 'timed out' : isQuota ? '429' : '503'}, retrying in ${waitSec}s`);
             await new Promise(r => setTimeout(r, waitSec * 1000));
             continue;
           }
           if (canFallback && models.indexOf(model) < models.length - 1) {
-            console.warn(`Gemini ${model} unavailable (${isTimeout ? 'timeout' : isDailyQuota ? 'daily quota' : isQuota ? 'rate limit' : isNotFound ? 'not found' : '503'}), falling back to next model...`);
+            logger.warn(`Gemini ${model} unavailable (${isTimeout ? 'timeout' : isDailyQuota ? 'daily quota' : isQuota ? 'rate limit' : isNotFound ? 'not found' : '503'}), falling back`);
             break;
           }
-          console.error("Gemini error response:", e.message || String(e));
+          logger.error('Gemini error', { meta: { error: e.message || String(e) } });
           throw new Error(handleSDKError(e));
         }
       }
@@ -718,15 +704,14 @@ async function startServer() {
     }
 
     if (!response) {
-      console.error("Gemini error response:", lastError?.message || 'All models unavailable');
+      logger.error('Gemini all models exhausted', { meta: { error: lastError?.message || 'All models unavailable' } });
       throw new Error(handleSDKError(lastError));
     }
 
     // Log finish reason / block info for debugging Hindi generation issues.
     const candidate = (response as any)?.candidates?.[0];
     if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
-      console.warn("Gemini finish reason:", candidate.finishReason,
-        "safetyRatings:", JSON.stringify(candidate.safetyRatings || []));
+      logger.warn('Gemini non-STOP finish', { meta: { finishReason: candidate.finishReason, safetyRatings: candidate.safetyRatings } });
     }
 
     let rawText = '';
@@ -734,7 +719,7 @@ async function startServer() {
       rawText = response.text || "";
     } catch (textErr: any) {
       // response.text getter can throw if the response was blocked
-      console.error("response.text threw:", textErr.message);
+      logger.error('Gemini response.text threw', { meta: { error: textErr.message } });
       throw new Error("AI response was blocked. This may be a false positive for Hindi educational content — please try again.");
     }
 
@@ -808,11 +793,11 @@ async function startServer() {
              while (openBrackets > 0) { repaired += ']'; openBrackets--; }
              while (openBraces > 0) { repaired += '}'; openBraces--; }
              const repairedObj = JSON.parse(repaired);
-             console.warn("Repaired truncated JSON successfully. Original length:", rawText.length);
+             logger.warn('Repaired truncated JSON', { meta: { originalLength: rawText.length } });
              return repairedObj;
            } catch (_repairErr) { /* repair failed too */ }
 
-           console.error("Failed to parse JSON from Gemini. Length:", rawText.length, "First 500 chars:", rawText.substring(0, 500));
+           logger.error('Failed to parse JSON from Gemini', { meta: { length: rawText.length, preview: rawText.substring(0, 200) } });
            throw new Error("The AI response was incomplete or corrupted. Please try again.");
          }
        }
@@ -919,7 +904,7 @@ Respond with ONLY a JSON object that satisfies this EXACT interface:
       res.status(classified.status).json({ success: false, error: classified.message, errorCode: classified.code });
     }
   });
-  app.post("/api/generate-kit", rateLimitMiddleware('generate-kit'), async (req: any, res) => {
+  app.post("/api/generate-kit", largeBodyParser, rateLimitMiddleware('generate-kit'), async (req: any, res) => {
     try {
       // ── Input validation ────────────────────────────────────────────────
       const valErrors = validateGenerateKit(req.body);
@@ -961,9 +946,9 @@ Respond with ONLY a JSON object that satisfies this EXACT interface:
 
       // Debug logging for kit generation context
       if (chapterTitle) {
-        console.log(`[generate-kit] Chapter: "${chapterTitle}" | Class: ${classLevel || 'Class 10'} | Subject: ${subject || 'N/A'} | Mode: ${mode || 'all'} | Stream: ${req.body.stream || 'N/A'}`);
+        logger.info('generate-kit request', { endpoint: '/api/generate-kit', meta: { chapter: chapterTitle, class: classLevel || 'Class 10', subject, mode: mode || 'all' } });
       }
-      console.log("Resolved topic:", topic || "Extracted from image");
+      logger.debug(`Resolved topic: ${topic || 'Extracted from image'}`, { endpoint: '/api/generate-kit' });
 
       // ── Syllabus chunk retrieval (RAG-ready grounding) ────────────────────
       const retrieval = retrieveChunks({
@@ -980,7 +965,7 @@ ${retrieval.chunks.map(c => `[${c.chunkType.toUpperCase()}] ${c.text}`).join('\n
 Use only the provided syllabus context and general educational explanation. Do not invent out-of-syllabus sections.
 `
         : '';
-      console.log(`Syllabus retrieval: ${retrieval.chunks.length} chunks found for ${chapterTitle || topic || 'unknown'}`);
+      logger.debug(`Syllabus retrieval: ${retrieval.chunks.length} chunks for ${chapterTitle || topic || 'unknown'}`, { endpoint: '/api/generate-kit' });
 
       // When the request comes from the predefined chapter library, lock the
       // prompt to that chapter so Gemini doesn't drift into adjacent syllabus.
@@ -1307,7 +1292,7 @@ ${hindiFinalOverride}`;
           try {
             return JSON.parse(resultStringOrObject);
           } catch (jsonErr) {
-            console.error("Manual JSON Parse Error on raw string:", jsonErr);
+            logger.error('Manual JSON parse error on raw string', { endpoint: '/api/generate-kit', meta: { preview: resultStringOrObject.substring(0, 100) } });
             throw new Error("Failed to parse JSON structure. API returned: " + resultStringOrObject.substring(0, 100));
           }
         }
@@ -1322,7 +1307,7 @@ ${hindiFinalOverride}`;
           // For Hindi content, retry once with a streamlined prompt that drops englishGloss
           // to reduce output size (truncation is the most common failure mode).
           if (forceHindi) {
-            console.warn("Hindi kit generation failed on first attempt, retrying with simplified prompt...", firstError.message);
+            logger.warn('Hindi kit generation failed, retrying with simplified prompt', { endpoint: '/api/generate-kit', meta: { error: firstError.message } });
             const simplifiedPrompt = promptTemplate
               .replace(/ONE EXCEPTION[\s\S]*?primary teaching language everywhere else\./g,
                 'Do NOT include any englishGloss field. Write everything in Hindi Devanagari only.')
@@ -1336,7 +1321,7 @@ ${hindiFinalOverride}`;
         }
       }, req.requestId);
 
-      console.log("Parsed revision kit successfully. Extracting keys.");
+      logger.debug('Parsed revision kit successfully', { endpoint: '/api/generate-kit' });
 
       // Tag the kit with its language, subject, classLevel, and stream so
       // the client can render class-appropriate UI and match cached kits.
@@ -1916,7 +1901,7 @@ Grading rules:
   // Uses Gemini Vision to extract text from a photo of a handwritten answer.
   // API key stays server-side; the frontend sends the image as base64.
   // Returns extracted text, unclear words, confidence level, and review flag.
-  app.post('/api/extract-handwritten-answer', async (_req, res) => {
+  app.post('/api/extract-handwritten-answer', largeBodyParser, async (_req, res) => {
     return res.status(410).json({ success: false, error: 'Handwritten answer upload is temporarily disabled. Please type your answer instead.' });
     /* --- OCR implementation preserved for future use ---
     try {
@@ -1989,7 +1974,7 @@ If the image contains no readable text at all, return extractedText as empty str
         },
       });
     } catch (err: any) {
-      console.error('extract-handwritten-answer error:', err);
+      logger.error('extract-handwritten-answer error', { endpoint: '/api/ai/extract-handwritten-answer', meta: { error: err.message } });
       const classified = classifyAIError(err);
       res.status(classified.status).json({
         success: false,
@@ -2696,21 +2681,11 @@ Rules:
       const hasTranscript = transcript && transcript.trim().length > 0;
       const hasTitle = safeTitle.length > 0 || safeTopic.length > 0 || safeManualTopic.length > 0;
 
-      // ── Debug logging (no API keys) ────────────────────────────────
-      console.log('[youtube-recall] Request:', {
-        hasTranscript,
-        transcriptLen: hasTranscript ? transcript.trim().length : 0,
-        hasTitle,
-        safeTitle: safeTitle || '(none)',
-        safeTopic: safeTopic || '(none)',
-        safeManualTopic: safeManualTopic || '(none)',
-        outputLanguage,
-        sourceLanguage,
-      });
+      logger.debug('youtube-recall request', { endpoint: '/api/ai/youtube-recall-kit', meta: { hasTranscript, transcriptLen: hasTranscript ? transcript.trim().length : 0, hasTitle, outputLanguage, sourceLanguage } });
 
       // ── Guard: must have at least a topic ──────────────────────────
       if (!hasTitle && !hasTranscript) {
-        console.log('[youtube-recall] → blocked: no topic or transcript');
+        logger.debug('youtube-recall blocked: no topic or transcript', { endpoint: '/api/ai/youtube-recall-kit' });
         return res.status(400).json({
           success: false,
           error: 'Please enter the video topic to generate a recall kit.',
@@ -2734,18 +2709,14 @@ Rules:
 
       // ── Final safety: abort if resolvedTitle is generic ────────────
       if (resolvedTitle === 'YouTube Video' && !hasTranscript) {
-        console.log('[youtube-recall] → blocked: no meaningful topic');
+        logger.debug('youtube-recall blocked: no meaningful topic', { endpoint: '/api/ai/youtube-recall-kit' });
         return res.status(400).json({
           success: false,
           error: 'Please enter the video topic to generate a recall kit.',
         });
       }
 
-      console.log('[youtube-recall] Generating kit:', {
-        resolvedTitle,
-        sourceConfidence,
-        outputLanguage,
-      });
+      logger.info('youtube-recall generating', { endpoint: '/api/ai/youtube-recall-kit', meta: { resolvedTitle, sourceConfidence, outputLanguage } });
 
       const transcriptCtx = hasTranscript
         ? `\n\nVideo Transcript / Student Notes:\n${transcript.trim().substring(0, 12000)}`
@@ -2777,12 +2748,7 @@ Rules:
         }
       }
 
-      console.log('[youtube-recall] Language:', {
-        transcriptIsHindi,
-        detectedSourceLang,
-        resolvedOutputLang,
-        requestedOutputLanguage: outputLanguage,
-      });
+      logger.debug('youtube-recall language detection', { endpoint: '/api/ai/youtube-recall-kit', meta: { transcriptIsHindi, detectedSourceLang, resolvedOutputLang } });
 
       const prompt = `You are an expert ${examMode} ${classLevel} teacher. A student watched a YouTube video and wants a recall kit to test their understanding.
 
@@ -2876,14 +2842,7 @@ Requirements:
         detectedSubject: raw.detectedSubject || '',
       };
 
-      console.log('[youtube-recall] Kit generated:', {
-        title: kit.title,
-        detectedSubject: kit.detectedSubject,
-        sourceConfidence: kit.sourceConfidence,
-        outputLanguage: kit.outputLanguage,
-        flashcardCount: kit.flashcards.length,
-        quizCount: kit.quiz.length,
-      });
+      logger.info('youtube-recall kit generated', { endpoint: '/api/ai/youtube-recall-kit', meta: { title: kit.title, subject: kit.detectedSubject, flashcards: kit.flashcards.length, quizzes: kit.quiz.length } });
 
       // Store as a kit in SQLite for library save
       const kitId = Date.now().toString();
@@ -2918,7 +2877,7 @@ Requirements:
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    logger.info(`Server running on http://localhost:${PORT}`);
   });
 }
 

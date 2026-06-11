@@ -8,6 +8,13 @@ import { defineConfig } from 'vite';
 // read process.env.GEMINI_API_KEY server-side only.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    minify: 'esbuild',
+    target: 'es2020',
+  },
+  esbuild: {
+    drop: process.env.NODE_ENV === 'production' ? ['console', 'debugger'] : [],
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, '.'),
