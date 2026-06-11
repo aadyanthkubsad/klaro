@@ -1,0 +1,16 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Dev artifacts
+temp.ts
+server_log.txt
+fetch_debug.*
+test_env.cjs
+.claude/
+/data/
