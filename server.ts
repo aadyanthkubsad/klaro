@@ -206,8 +206,21 @@ async function startServer() {
       }
       const hash = await hashPassword(password);
       const user = createUser(email, hash, displayName || 'Learner');
+
+      // Beta-tester perk: the first N signups get Pro automatically so they can
+      // exercise audio narration and other gated features without payment.
+      const BETA_PRO_LIMIT = parseInt(process.env.BETA_PRO_LIMIT || '25', 10);
+      const totalUsers = getDatabaseStats().users;
+      let planType = user.plan_type;
+      if (totalUsers <= BETA_PRO_LIMIT) {
+        const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+        updateUserPlan(user.id, 'pro', expiresAt);
+        planType = 'pro';
+        logger.info('Beta Pro granted on signup', { meta: { userId: user.id, email: user.email, signupNumber: totalUsers, betaLimit: BETA_PRO_LIMIT } });
+      }
+
       const token = generateToken({ userId: user.id, email: user.email });
-      res.json({ success: true, token, user: { id: user.id, email: user.email, displayName: user.display_name, planType: user.plan_type } });
+      res.json({ success: true, token, user: { id: user.id, email: user.email, displayName: user.display_name, planType } });
     } catch (err: any) {
       logger.error('Registration failed', { meta: { error: err.message } });
       res.status(500).json({ success: false, error: 'Registration failed' });
