@@ -643,8 +643,8 @@ async function startServer() {
 
     const contentsObj = typeof contents[0] === 'string' ? [{ role: "user", parts: contents.map(c => ({ text: c })) }] : contents;
 
-    // Primary models for large prompts (kit generation); lite models as last resort.
-    const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite"];
+    // Lite models first for speed (2-3x faster); full flash models as fallback for prompts they can't handle.
+    const models = ["gemini-2.5-flash-lite", "gemini-2.0-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"];
     let response;
     let lastError: any;
 
@@ -660,7 +660,7 @@ async function startServer() {
             config: {
               temperature: 0.4,
               responseMimeType: respFormat,
-              maxOutputTokens: 65536,
+              maxOutputTokens: 16384,
               safetySettings: [
                 { category: "HARM_CATEGORY_HARASSMENT" as any, threshold: "BLOCK_ONLY_HIGH" as any },
                 { category: "HARM_CATEGORY_HATE_SPEECH" as any, threshold: "BLOCK_ONLY_HIGH" as any },
