@@ -27,6 +27,7 @@ COPY --from=builder /app/dist ./dist
 
 # Copy static data files needed at runtime
 COPY src/data ./src/data
+COPY server/schema.sql ./server/schema.sql
 
 # Create data directory for JSON database persistence
 RUN mkdir -p /app/data && chown -R node:node /app/data
