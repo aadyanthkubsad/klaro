@@ -37,21 +37,21 @@ export interface ChapterAudioTarget {
 const WORDS_PER_MINUTE = 130; // TTS speaking rate
 
 function target(marks: number, depth: ContentDepth): ChapterAudioTarget {
-  // Base minutes from marks (1 mark ≈ 1 minute of explanation)
-  let baseMins = Math.max(5, Math.round(marks * 1.2));
+  // Base minutes from marks (1 mark ≈ 0.7 minute of explanation)
+  let baseMins = Math.max(3, Math.round(marks * 0.7));
 
   // Depth multiplier
   const depthMultiplier: Record<ContentDepth, number> = {
     'light': 0.8,
     'moderate': 1.0,
-    'heavy': 1.2,
-    'very-heavy': 1.4,
+    'heavy': 1.15,
+    'very-heavy': 1.3,
   };
 
   let mins = Math.round(baseMins * depthMultiplier[depth]);
 
-  // Clamp to 5-15 minute range
-  mins = Math.max(5, Math.min(15, mins));
+  // Clamp to 3-8 minute range — keeps total TTS time under ~30s on mobile
+  mins = Math.max(3, Math.min(8, mins));
 
   return {
     estimatedMarks: marks,

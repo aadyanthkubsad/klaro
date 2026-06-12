@@ -386,8 +386,8 @@ export async function generateAudio(params: GenerateAudioParams): Promise<Genera
     },
   });
 
-  // Process chunks in parallel (up to 3 concurrent) for speed
-  const CONCURRENCY = 3;
+  // Process chunks in parallel (up to 6 concurrent) for speed
+  const CONCURRENCY = 6;
   const audioBuffers: Buffer[] = new Array(chunks.length);
 
   for (let batch = 0; batch < chunks.length; batch += CONCURRENCY) {
