@@ -16,7 +16,8 @@ const TABS = [
 
 export const MobileBottomBar = ({ currentView, setView, onMoreTap }: MobileBottomBarProps) => (
   <nav
-    className="flex md:hidden items-center justify-around fixed bottom-0 left-0 right-0 z-40 bg-navy-dark border-t border-navy-hover px-2 pb-safe"
+    className="flex md:hidden items-center justify-around fixed bottom-0 left-0 right-0 z-40 bg-navy-dark border-t border-navy-hover px-2"
+    style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
     aria-label="Mobile navigation"
   >
     {TABS.map(({ id, label, icon: Icon }) => {
@@ -35,7 +36,7 @@ export const MobileBottomBar = ({ currentView, setView, onMoreTap }: MobileBotto
           <span className={`text-[10px] font-bold tracking-wide ${active ? 'text-primary' : 'text-navy-muted'}`}>
             {label}
           </span>
-          {active && <span className="w-1 h-1 rounded-full bg-primary mt-0.5" />}
+          <span className={`w-1 h-1 rounded-full mt-0.5 ${active ? 'bg-primary' : 'bg-transparent'}`} />
         </button>
       );
     })}
