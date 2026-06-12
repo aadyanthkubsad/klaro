@@ -34,9 +34,14 @@ export const MobileDrawer = ({
 }: MobileDrawerProps) => {
   useEffect(() => {
     if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
+    return () => {
+      document.body.style.overflow = prev;
+      document.removeEventListener('keydown', handler);
+    };
   }, [open, onClose]);
 
   const navigate = (id: string) => { setView(id); onClose(); };
@@ -58,9 +63,9 @@ export const MobileDrawer = ({
 
           {/* Drawer panel */}
           <motion.nav
-            initial={{ x: -256 }}
+            initial={{ x: '-100%' }}
             animate={{ x: 0 }}
-            exit={{ x: -256 }}
+            exit={{ x: '-100%' }}
             transition={{ duration: 0.25, ease: 'easeOut' }}
             className="absolute left-0 top-0 h-full w-64 bg-navy-dark border-r border-navy-hover flex flex-col py-6"
             aria-label="Navigation drawer"
