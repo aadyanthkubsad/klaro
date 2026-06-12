@@ -29,8 +29,9 @@ COPY --from=builder /app/dist ./dist
 COPY src/data ./src/data
 COPY server/schema.sql ./server/schema.sql
 
-# Create data directory for JSON database persistence
-RUN mkdir -p /app/data && chown -R node:node /app/data
+# Create runtime directories and set ownership before dropping to non-root
+RUN mkdir -p /app/data /app/public/generated-audio && \
+    chown -R node:node /app/data /app/public/generated-audio
 
 # Run as non-root user
 USER node
