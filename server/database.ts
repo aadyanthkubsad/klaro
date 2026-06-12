@@ -29,24 +29,59 @@ let db: Database.Database;
 // ─── Initialization ─────────────────────────────────────────────────────────
 
 /** Initialize SQLite database — create tables, migrate legacy data. */
-export function initDatabase(): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+export async function initDatabase(): Promise<void> {
+  // Retry to handle persistent-volume mount races on Railway-style hosts.
+  // The container can boot before /app/data is mounted; opening the DB then
+  // throws SQLITE_CANTOPEN and the container restart-loops before the volume
+  // ever becomes ready. Wait up to ~15s for the directory to be writable.
+  const MAX_ATTEMPTS = 10;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      // Confirm we can actually write to DATA_DIR before opening the DB.
+      // On a not-yet-mounted volume, mkdirSync sometimes succeeds against
+      // the underlying overlay but the real volume is unwritable.
+      const probePath = path.join(DATA_DIR, '.write-probe');
+      fs.writeFileSync(probePath, String(Date.now()));
+      fs.unlinkSync(probePath);
+
+      db = new Database(DB_PATH);
+      db.pragma('journal_mode = WAL');
+      db.pragma('foreign_keys = ON');
+
+      const schema = fs.readFileSync(SCHEMA_PATH, 'utf-8');
+      db.exec(schema);
+
+      const userCount = (db.prepare('SELECT COUNT(*) as c FROM users').get() as any).c;
+      if (userCount === 0) {
+        migrateFromJson();
+      }
+
+      const stats = getDatabaseStats();
+      logger.info('SQLite database initialized', { meta: { path: DB_PATH, attempt, ...stats } });
+      return;
+    } catch (err) {
+      lastError = err;
+      const msg = (err as Error)?.message ?? String(err);
+      const isLast = attempt === MAX_ATTEMPTS;
+      // Exponential backoff capped at 3s: 200ms, 400ms, 800ms, 1600ms, 3000ms...
+      const delayMs = Math.min(3000, 200 * Math.pow(2, attempt - 1));
+
+      logger.warn('Database init attempt failed', {
+        meta: { attempt, maxAttempts: MAX_ATTEMPTS, error: msg, willRetry: !isLast, nextDelayMs: isLast ? 0 : delayMs },
+      });
+
+      if (isLast) break;
+      await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+    }
   }
-  db = new Database(DB_PATH);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
 
-  const schema = fs.readFileSync(SCHEMA_PATH, 'utf-8');
-  db.exec(schema);
-
-  const userCount = (db.prepare('SELECT COUNT(*) as c FROM users').get() as any).c;
-  if (userCount === 0) {
-    migrateFromJson();
-  }
-
-  const stats = getDatabaseStats();
-  logger.info('SQLite database initialized', { meta: { path: DB_PATH, ...stats } });
+  logger.error('Database init failed after all retries', { meta: { attempts: MAX_ATTEMPTS, dataDir: DATA_DIR } });
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 /** Migrate legacy klaro-db.json into SQLite (runs once on first start). */

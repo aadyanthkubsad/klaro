@@ -71,7 +71,7 @@ async function startServer() {
   logSarvamKeyStatus();
 
   // ── Initialize infrastructure ──────────────────────────────────────────────
-  initDatabase();
+  await initDatabase();
 
   // One-time migration: backfill VARK types for legacy 'revision-kit' library items
   const varkBackfilled = backfillVarkTypes();
