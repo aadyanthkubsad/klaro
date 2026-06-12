@@ -12,6 +12,9 @@ import { useFlashcards } from './hooks/useFlashcards';
 import { usePaywall } from './hooks/usePaywall';
 import type { RevisionKit } from './types/kit';
 import { Sidebar } from './components/layout/Sidebar';
+import { MobileTopBar } from './components/layout/MobileTopBar';
+import { MobileBottomBar } from './components/layout/MobileBottomBar';
+import { MobileDrawer } from './components/layout/MobileDrawer';
 import { Dashboard } from './components/views/Dashboard';
 import { LibraryView } from './components/views/LibraryView';
 import { AnalyticsView } from './components/views/AnalyticsView';
@@ -107,6 +110,7 @@ export default function App() {
   const [analyticsTab, setAnalyticsTab] = useState<'test_analysis' | 'weak_topics' | 'score_analysis'>('test_analysis');
   const [selectedQuizAttemptId, setSelectedQuizAttemptId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   // Billing
   const [planType, setPlanTypeState] = useState<PlanType>(() => getPlan());
@@ -430,11 +434,25 @@ export default function App() {
     );
   }
 
+  const isApp = view !== 'landing' && view !== 'auth';
+
   return (
     <div className="min-h-screen flex bg-surface-container-lowest">
-      {view !== 'landing' && view !== 'auth' && <Sidebar currentView={view} setView={setView} stats={userStats} user={user} onLogout={() => { logout(); setView('landing'); }} />}
-      
-      <main className={`flex-1 ${view === 'landing' || view === 'auth' ? '' : 'md:ml-64'} overflow-x-hidden transition-all duration-500`}>
+      {isApp && <Sidebar currentView={view} setView={setView} stats={userStats} user={user} onLogout={() => { logout(); setView('landing'); }} />}
+      {isApp && <MobileTopBar currentView={view} onMenuOpen={() => setDrawerOpen(true)} />}
+      {isApp && <MobileBottomBar currentView={view} setView={setView} onMoreTap={() => setDrawerOpen(true)} />}
+      {isApp && (
+        <MobileDrawer
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          currentView={view}
+          setView={setView}
+          user={user}
+          onLogout={() => { logout(); setView('landing'); }}
+        />
+      )}
+
+      <main className={`flex-1 ${isApp ? 'md:ml-64 pt-14 md:pt-0 pb-16 md:pb-0' : ''} overflow-x-hidden transition-all duration-500`}>
         {/* Global Back pill — appears on every secondary view, navigates the real history stack */}
         {view !== 'landing' && view !== 'auth' && view !== 'dashboard' && (
           <div className="sticky top-0 z-30 px-6 md:px-10 pt-6 pb-2 bg-surface-container-lowest/80 backdrop-blur-sm">
