@@ -560,7 +560,7 @@ export default function App() {
                 </button>
               </div>
               <p className="mt-5 text-[10px] text-on-surface-variant/60 text-center">
-                Secure payments via Razorpay &mdash; a Bhuviona Technologies product.
+                Secure payments via Razorpay &mdash; a <a href="https://www.bhuviona.com/" target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: '#00BCD4' }}>Bhuviona Technologies</a> product.
               </p>
             </div>
           </div>

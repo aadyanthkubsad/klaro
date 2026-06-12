@@ -111,7 +111,7 @@ export const Sidebar = ({ currentView, setView, stats, user, onLogout }: Sidebar
           <BhuvionaLogoMark size={36} />
           <div className="flex flex-col gap-0.5">
             <h1 className="text-base font-black text-white tracking-tight leading-none">Lumina Learn</h1>
-            <p className="text-[9px] font-bold uppercase tracking-widest leading-none" style={{ color: '#00BCD4' }}>by Bhuviona Technologies</p>
+            <a href="https://www.bhuviona.com/" target="_blank" rel="noopener noreferrer" className="text-[9px] font-bold uppercase tracking-widest leading-none hover:underline" style={{ color: '#00BCD4' }}>by Bhuviona Technologies</a>
           </div>
         </div>
       </div>

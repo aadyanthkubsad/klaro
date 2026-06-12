@@ -46,12 +46,15 @@ export const BhuvionaWordmark = ({
           Lumina Learn
         </span>
         {showTagline && (
-          <span
-            className="text-[10px] font-bold uppercase tracking-widest leading-none"
+          <a
+            href="https://www.bhuviona.com/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[10px] font-bold uppercase tracking-widest leading-none hover:underline"
             style={{ color: '#00BCD4' }}
           >
             by Bhuviona Technologies
-          </span>
+          </a>
         )}
       </div>
     </div>

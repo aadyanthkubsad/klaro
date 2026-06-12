@@ -372,7 +372,7 @@ export const LandingPage = ({ setView }: LandingPageProps) => {
         <div className="max-w-4xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
           <BhuvionaWordmark variant="light" size="sm" showTagline />
           <p className="text-xs">Secure payments via Razorpay. Built for CBSE students.</p>
-          <p className="text-xs">&copy; 2026 Bhuviona Technologies Pvt Ltd. All rights reserved.</p>
+          <p className="text-xs">&copy; 2026 <a href="https://www.bhuviona.com/" target="_blank" rel="noopener noreferrer" className="hover:underline">Bhuviona Technologies Pvt Ltd</a>. All rights reserved.</p>
         </div>
       </footer>
     </div>
