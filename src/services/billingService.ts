@@ -35,6 +35,45 @@ const CHANGE_EVENT = 'lumina:billing-change';
  */
 export const DEV_FORCE_PRO = false;
 
+/**
+ * Open-beta flag. While true, every plan reports unlimited usage and every
+ * feature flag is on. Set to false to restore real plan tiers.
+ * The server has a matching BETA_FREE_FOR_ALL env var that bypasses
+ * rate-limiting — flip both together when the beta ends.
+ */
+export const BETA_FREE_FOR_ALL = true;
+
+const UNLIMITED_LIMITS: PlanLimits = {
+  dailyKitsLimit: Infinity,
+  dailyQuizLimit: Infinity,
+  dailyFlashcardSetsLimit: Infinity,
+  dailyPdfDownloadsLimit: Infinity,
+  dailyWrittenAnswersLimit: Infinity,
+  monthlyYoutubeRecallLimit: Infinity,
+  unlimitedFlashcards: true,
+  pdfExport: true,
+  audioSummaries: true,
+  mistakeSlideshow: true,
+  monthlyPlanner: true,
+  masteryAnalytics: true,
+  premium3D: true,
+  mp3Download: true,
+  prioritisedGeneration: true,
+  librarySaveLimit: Infinity,
+  weakTopicRetests: true,
+  previousYearPapers: true,
+  spacedRevisionTasks: true,
+  youtubeRecall: true,
+  writtenAnswerFeedback: true,
+  mockTestMode: true,
+  forgettingCurveCalendar: true,
+  advancedAnalytics: true,
+  masteryTracking: true,
+  dailyAudioGenerationsLimit: Infinity,
+  aiNarration: true,
+  storyModeNarration: true,
+};
+
 // ─── pricing data (exported for OffersView) ─────────────────────────────────
 
 export interface PricingTier {
@@ -108,6 +147,9 @@ export const PRICING: PricingTier[] = [
 const OWNER_EMAILS = ['prashanth.kubsad@gmail.com', 'kubsadaadyanth@gmail.com'];
 
 export function isOwner(): boolean {
+  // Open beta — treat every user as owner so the Settings page renders the
+  // "Unlimited Access" card instead of the used/limit counters.
+  if (BETA_FREE_FOR_ALL) return true;
   try {
     // Primary: check the email AuthContext stores on login/register/me
     const email = window.localStorage.getItem('lumina:user-email');
@@ -174,6 +216,7 @@ export function onPlanChange(cb: () => void): () => void {
 // ─── plan limits table ──────────────────────────────────────────────────────
 
 export function getLimitsFor(plan: PlanType): PlanLimits {
+  if (BETA_FREE_FOR_ALL) return UNLIMITED_LIMITS;
   switch (plan) {
     case 'pro':
       return {

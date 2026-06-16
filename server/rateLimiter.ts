@@ -116,6 +116,12 @@ export function checkRateLimit(
   bucket: EndpointBucket,
   plan: PlanType = 'free',
 ): RateLimitResult {
+  // Open-beta bypass: skip all rate limits while testing.
+  // Set BETA_FREE_FOR_ALL=false in Railway to restore normal gating.
+  if ((process.env.BETA_FREE_FOR_ALL ?? 'true').toLowerCase() !== 'false') {
+    return { allowed: true, remaining: Infinity, limit: Infinity };
+  }
+
   const limit = PLAN_LIMITS[plan]?.[bucket] ?? PLAN_LIMITS.free[bucket] ?? 5;
 
   // Limit of 0 = feature not available for this plan
