@@ -168,23 +168,13 @@ async function startServer() {
   // ── Auth middleware (sets req.userId — allows anonymous fallback) ─────────
   app.use(authMiddleware);
 
-  // ── Owner override — grant Pro plan to founder emails ──────────────────────
-  const OWNER_EMAILS = (process.env.OWNER_EMAILS || 'prashanth.kubsad@gmail.com,kubsadaadyanth@gmail.com')
-    .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+  // ── Beta testing — everyone gets Pro ────────────────────────────────────────
+  // While the app is in open beta we unlock every Pro/Plus feature for all
+  // users. Set BETA_FREE_FOR_ALL=false in Railway to restore normal plan gates.
+  const BETA_FREE_FOR_ALL = (process.env.BETA_FREE_FOR_ALL ?? 'true').toLowerCase() !== 'false';
   app.use((req: any, _res: any, next: any) => {
-    if (req.userEmail && OWNER_EMAILS.includes(req.userEmail.toLowerCase())) {
+    if (BETA_FREE_FOR_ALL) {
       req.userPlan = 'pro';
-      return next();
-    }
-    if (req.userId && req.userId !== 'u-migrated') {
-      try {
-        const dbUser = getUserById(req.userId);
-        if (dbUser?.email && OWNER_EMAILS.includes(dbUser.email.toLowerCase())) {
-          req.userEmail = dbUser.email;
-          req.userPlan = 'pro';
-          return next();
-        }
-      } catch { /* DB lookup failed — continue */ }
     }
     next();
   });
@@ -207,16 +197,14 @@ async function startServer() {
       const hash = await hashPassword(password);
       const user = createUser(email, hash, displayName || 'Learner');
 
-      // Beta-tester perk: the first N signups get Pro automatically so they can
-      // exercise audio narration and other gated features without payment.
-      const BETA_PRO_LIMIT = parseInt(process.env.BETA_PRO_LIMIT || '25', 10);
-      const totalUsers = getDatabaseStats().users;
+      // Open beta: every new signup gets Pro for a year so all features are
+      // testable without payment. Flip BETA_FREE_FOR_ALL=false in Railway to
+      // revert to free-tier signups when the beta ends.
       let planType = user.plan_type;
-      if (totalUsers <= BETA_PRO_LIMIT) {
+      if (BETA_FREE_FOR_ALL) {
         const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
         updateUserPlan(user.id, 'pro', expiresAt);
         planType = 'pro';
-        logger.info('Beta Pro granted on signup', { meta: { userId: user.id, email: user.email, signupNumber: totalUsers, betaLimit: BETA_PRO_LIMIT } });
       }
 
       const token = generateToken({ userId: user.id, email: user.email });
@@ -242,7 +230,8 @@ async function startServer() {
         return res.status(401).json({ success: false, error: 'Invalid email or password' });
       }
       const token = generateToken({ userId: user.id, email: user.email });
-      res.json({ success: true, token, user: { id: user.id, email: user.email, displayName: user.display_name, planType: user.plan_type } });
+      const planType = BETA_FREE_FOR_ALL ? 'pro' : user.plan_type;
+      res.json({ success: true, token, user: { id: user.id, email: user.email, displayName: user.display_name, planType } });
     } catch (err: any) {
       logger.error('Login failed', { meta: { error: err.message } });
       res.status(500).json({ success: false, error: 'Login failed' });
