@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { aiService } from '../services/aiService';
 import { ExamMode, PlanType, PaywallConfig } from '../types';
 import { ChapterItem, ChapterMode } from '../data/class10Syllabus';
@@ -74,7 +74,10 @@ export function useRevisionKit({
   const [chapterPicker, setChapterPicker] = useState<ChapterItem | null>(null);
   const [chapterGenerating, setChapterGenerating] = useState(false);
   const [chapterGenError, setChapterGenError] = useState<string | null>(null);
-  const lastChapterPick = { current: null as { chapter: ChapterItem; mode: ChapterMode; language?: 'hi' | 'en'; regenerate?: boolean } | null };
+  const lastChapterPick = useRef<{ chapter: ChapterItem; mode: ChapterMode; language?: 'hi' | 'en'; regenerate?: boolean } | null>(null);
+  // Flips true when the user closes the modal mid-generation. tryGenerate
+  // checks it before navigating so we don't yank them into a view they cancelled.
+  const cancelledRef = useRef(false);
 
   const stripModePrefix = (t: string) =>
     t.replace(/^\s*(audio|visual|read\/write|readwrite|read|write)\s*[:\-–]\s*/i, '').trim();
@@ -127,6 +130,7 @@ export function useRevisionKit({
     const language: 'hi' | 'en' = opts?.language ?? (chapter.subject === 'Hindi' ? 'hi' : 'en');
     lastChapterPick.current = { chapter, mode, language, regenerate: opts?.regenerate };
     setChapterGenError(null);
+    cancelledRef.current = false;
     const target = routeForMode(mode);
 
     if (!opts?.regenerate) {
@@ -147,8 +151,10 @@ export function useRevisionKit({
 
     const tryGenerate = async () => {
       const kitData = await doGenerate(chapter, mode, language);
-      incrementKitsUsedToday();
+      // Server already persisted the kit — refresh so it shows in Library either way.
       fetchLibrary({ silent: true }).catch(() => {});
+      if (cancelledRef.current) return;
+      incrementKitsUsedToday();
       setChapterPicker(null);
       setKit(kitData as RevisionKit);
       onNavigate?.(kitData as RevisionKit, target);
@@ -158,6 +164,7 @@ export function useRevisionKit({
       setChapterGenerating(true);
       await tryGenerate();
     } catch (err: any) {
+      if (cancelledRef.current) return;
       const msg: string = err?.message || '';
       const isTransient = /too long|timed out|timeout|busy|503/i.test(msg);
       if (isTransient && !opts?.regenerate) {
@@ -165,6 +172,7 @@ export function useRevisionKit({
           await tryGenerate();
           return;
         } catch (retryErr: any) {
+          if (cancelledRef.current) return;
           setChapterGenError(retryErr?.message || 'Generation failed after retry. Please try again.');
           return;
         }
@@ -174,6 +182,16 @@ export function useRevisionKit({
       setChapterGenerating(false);
     }
   }, [planType, examMode, findExistingChapterKit, setPaywallOpen, fetchLibrary]);
+
+  // Called when the user closes the chapter modal — even during generation.
+  // The in-flight fetch keeps running (so the server still saves the kit),
+  // but tryGenerate sees cancelledRef and skips the auto-navigation.
+  const cancelChapterGeneration = useCallback(() => {
+    cancelledRef.current = true;
+    setChapterPicker(null);
+    setChapterGenError(null);
+    setChapterGenerating(false);
+  }, []);
 
   const retryChapterGeneration = useCallback((
     onNavigate?: (kitData: RevisionKit, target: string) => void,
@@ -197,5 +215,6 @@ export function useRevisionKit({
     findExistingChapterKit,
     openChapterMode,
     retryChapterGeneration,
+    cancelChapterGeneration,
   };
 }

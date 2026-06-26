@@ -246,6 +246,7 @@ export default function App() {
     findExistingChapterKit,
     openChapterMode: _openChapterMode,
     retryChapterGeneration: _retryChapterGeneration,
+    cancelChapterGeneration,
   } = useRevisionKit({
     planType,
     examMode,
@@ -519,7 +520,7 @@ export default function App() {
         isGenerating={chapterGenerating}
         generationError={chapterGenError}
         onPickMode={(mode, opts) => chapterPicker && openChapterMode(chapterPicker, mode, opts)}
-        onClose={() => { if (!chapterGenerating) { setChapterPicker(null); setChapterGenError(null); } }}
+        onClose={() => cancelChapterGeneration()}
         onRetry={retryChapterGeneration}
       />
 

@@ -1235,21 +1235,19 @@ Use this EXACT nested structure:
 ${jsonSkeleton}
 
 Requirements:
-- Create exactly 10 questions for the quiz. Mix difficulty: 3 easy, 5 medium, 2 hard. Include at least 2 questions based on previous year CBSE board exam patterns.
-- Tag each question with "cognitiveLevel" using Bloom's taxonomy: "recall" (definitions, facts, lists), "understand" (explain, compare, interpret), "apply" (solve numerical, use formula in new context), "analyze" (multi-step reasoning, evaluate, infer). Mix: ~3 recall, ~3 understand, ~2 apply, ~2 analyze.
-- Create at least 8 flashcards covering: NCERT definitions, formulas with units, processes/reactions, common student mistakes, and comparison pairs.
-- Quiz answers MUST be the single letter (A, B, C, or D) that matches the correct option.
+- Create exactly 6 questions for the quiz. Mix difficulty: 2 easy, 3 medium, 1 hard. At least 1 question must follow CBSE board exam patterns.
+- Tag each question with "cognitiveLevel" using Bloom's taxonomy: "recall", "understand", "apply", or "analyze". Mix roughly: 2 recall, 2 understand, 1 apply, 1 analyze.
+- Create exactly 6 flashcards covering: NCERT definitions, formulas with units, processes/reactions, and common student mistakes.
+- Quiz answers MUST be a single letter (A, B, C, or D) matching the correct option.
 - Options MUST start with "A) ", "B) ", "C) ", "D) ".
-- Explanations MUST be provided for every question and must reference the NCERT concept.
-- All strings must be valid and escape double quotes if they appear within text.
-- mindMap MUST have 4 to 6 nodes representing the KEY EXAM TOPICS for this chapter. Each node MUST have a descriptive "label" and 2 to 4 "children" sub-branches.
-  Children MUST be specific exam-relevant content: formulas (e.g. "F = ma [MLT⁻²]"), key facts (e.g. "7 fundamental SI units"), relationships (e.g. "Accuracy ≠ Precision"), and common exam questions.
-  Do NOT use vague labels like "definition" or "concept" — every child must help a student score marks.
-- conceptMap MUST have 4 to 6 entries showing how concepts CONNECT to each other with exam-relevant "reason" values (e.g. "Dimensional analysis uses fundamental units to verify formula correctness — frequently asked in 2-mark questions").
-- Create at least 7 keyPoints that cover the most important exam-relevant facts. Write as one-line revision statements a student can scan before an exam.
-- Create at least 4 tips in readWrite.tips including: study strategies, common mistakes to avoid, marking scheme insights, and formula memory tricks.
-- readWrite.externalReferences MUST include real, valid NCERT links (https://ncert.nic.in/textbook.php?...) and reputable Indian education sites (Byjus, Vedantu, etc.).
-- formulaTable MUST include EVERY formula, equation, and mathematical relationship that appears in the NCERT textbook for this specific chapter — no limit. For Science/Maths: include all named formulas, derived expressions, chemical equations, conversion relations, and any mathematical rule stated in the chapter (e.g. for "Some Basic Concepts of Chemistry" include: mole concept, molar mass, molarity, molality, mole fraction, mass percentage, ppm, mass of one atom, Avogadro's number relation, percentage composition, empirical/molecular formula relation, stoichiometric calculations, limiting reagent formula, percent yield, Gay-Lussac's law, density relations, etc.). For non-Science subjects, include key facts/dates/rules/literary devices instead. Each entry needs: name (what it is), formula (the expression/rule), notes (SI units, dimensional formula, exam frequency hint). Aim for completeness — missing a formula means the student has an incomplete reference sheet.
+- Every quiz question MUST have a concise explanation referencing the NCERT concept (1-2 sentences).
+- All strings must be valid JSON — escape any double quotes inside text.
+- mindMap MUST have exactly 5 nodes representing key exam topics. Each node has a descriptive "label" and 2-3 "children" with specific exam-relevant content (formulas, facts, relationships). Do NOT use vague labels like "definition".
+- conceptMap MUST have exactly 5 entries showing how concepts connect, with exam-relevant "reason" values.
+- Create exactly 5 keyPoints — one-line revision statements a student can scan before an exam.
+- Create exactly 3 tips in readWrite.tips covering study strategies, common mistakes, and formula/memory tricks.
+- readWrite.externalReferences: include 2-3 real NCERT or reputable Indian education links (Byjus, Vedantu, etc.).
+- formulaTable MUST include up to 8 of the most important formulas/equations/relationships from the NCERT textbook for this chapter — prioritise the ones most frequently tested. For Science/Maths: include named formulas, key derived expressions, and conversion relations. For non-Science subjects, include key facts/dates/rules/literary devices instead. Each entry needs: name, formula (the expression/rule), notes (SI units, dimensional formula, exam frequency hint).
 ${hindiFinalOverride}`;
 
       let contents: any[] = [];
