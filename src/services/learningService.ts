@@ -131,12 +131,23 @@ function addDays(dateISO: string, days: number): string {
 
 // ─── getters ─────────────────────────────────────────────────────────────────
 
+// Records synced before the field-mapping fix carry `createdAt` / `total`
+// instead of `date` / `totalQuestions` — normalise them on read.
 export function getQuizHistory(): QuizAttempt[] {
-  return read<QuizAttempt[]>(STORAGE_KEYS.quizHistory, []);
+  return read<any[]>(STORAGE_KEYS.quizHistory, []).filter(Boolean).map(a => ({
+    ...a,
+    date: a.date || a.createdAt || new Date(0).toISOString(),
+    totalQuestions: a.totalQuestions || a.total || a.answers?.length || 0,
+    weakTopics: a.weakTopics || [],
+    answers: a.answers || [],
+  }));
 }
 
 export function getMistakes(): MistakeEntry[] {
-  return read<MistakeEntry[]>(STORAGE_KEYS.mistakeNotebook, []);
+  return read<any[]>(STORAGE_KEYS.mistakeNotebook, []).filter(Boolean).map(m => ({
+    ...m,
+    date: m.date || m.createdAt || new Date(0).toISOString(),
+  }));
 }
 
 export function getMastery(): MasteryEntry[] {
@@ -814,7 +825,14 @@ export function getPlannerEvents(): PlannerEvent[] {
 // ─── written answer attempts ────────────────────────────────────────────────
 
 export function getWrittenAnswers(): WrittenAnswerAttempt[] {
-  return read<WrittenAnswerAttempt[]>(STORAGE_KEYS.writtenAnswers, []);
+  // Older synced records may lack `date` (stored as `createdAt`) or array fields — normalise.
+  return read<any[]>(STORAGE_KEYS.writtenAnswers, []).filter(Boolean).map(a => ({
+    ...a,
+    date: a.date || a.createdAt || a.created_at || new Date(0).toISOString(),
+    missingKeywords: a.missingKeywords || [],
+    strengths: a.strengths || [],
+    improvements: a.improvements || [],
+  }));
 }
 
 export function recordWrittenAnswer(attempt: Omit<WrittenAnswerAttempt, 'id' | 'date'>): WrittenAnswerAttempt {
@@ -846,7 +864,7 @@ export function computeWrittenAnswerAnalytics(): WrittenAnswerAnalytics {
 
   const totalAttempts = attempts.length;
   const averageScore = Math.round(
-    attempts.reduce((s, a) => s + (a.marksScored / a.totalMarks) * 100, 0) / totalAttempts
+    attempts.reduce((s, a) => s + (a.totalMarks ? (a.marksScored / a.totalMarks) * 100 : 0), 0) / totalAttempts
   );
 
   const kwCount = new Map<string, number>();
@@ -862,10 +880,11 @@ export function computeWrittenAnswerAnalytics(): WrittenAnswerAnalytics {
     .slice(0, 10);
 
   const scoreOverTime = [...attempts]
+    .filter(a => new Date(a.date).getTime() > 0) // skip records with no real date
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
     .map(a => ({
       date: a.date.slice(0, 10),
-      score: Math.round((a.marksScored / a.totalMarks) * 100),
+      score: a.totalMarks ? Math.round((a.marksScored / a.totalMarks) * 100) : 0,
     }));
 
   return { totalAttempts, averageScore, commonMissingKeywords, scoreOverTime };

@@ -10,7 +10,7 @@
  *            └─ Study Workspace (StudyNotesPanel) | Exam Answer Practice (sticky)
  *                                                 | Key Vocabulary carousel
  *   3. Formula/Key Reference Table (full width)
- *   4. Tips and Suggestions + External References (side by side)
+ *   4. External References (left, under formulas) · Tips and Suggestions (right)
  */
 
 import React, { useState, useMemo, useRef, useCallback } from 'react';
@@ -23,6 +23,8 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { exportKitToPDF, setLastLearningMode } from '../../lib/pdfExport';
 import { StudyNotesPanel } from './StudyNotesPanel';
+import { MathText } from '../common/MathText';
+import { isMathSubject } from '../../utils/mathFormat';
 import { aiService } from '../../services/aiService';
 
 import { UserStats, GeneratedNotes, PlanType, ExamAnswerFeedback } from '../../types';
@@ -130,6 +132,14 @@ function cleanVocabText(raw: string): string {
   return t.trim();
 }
 
+// ─── Cornell revision method tips (shown under the chapter's own tips) ───────
+const CORNELL_REVISION_TIPS = [
+  'Cover the Notes column and answer each cue question aloud — then check.',
+  'Read only the Summary strips the night before the exam for a 5-minute recap.',
+  'Redraw every diagram listed under Cues from memory.',
+  'Revisit pages whose questions you missed after 1 day, 3 days and 7 days.',
+];
+
 // ─── Formula Carousel (paginated table slideshow) ────────────────────────────
 
 const FORMULAS_PER_PAGE = 4;
@@ -142,14 +152,21 @@ const FormulaCarousel: React.FC<{ formulas: any[]; subject: string }> = ({ formu
   const canPrev = totalPages > 1;
   const canNext = totalPages > 1;
 
-  const isScienceMath = ['physics', 'chemistry', 'science', 'mathematics', 'maths'].includes((subject || '').toLowerCase());
+  const isScienceMath = isMathSubject(subject);
   const isSocialScience = ['history', 'geography', 'civics', 'social science'].includes((subject || '').toLowerCase());
   const isCommerce = ['accountancy', 'business studies', 'economics'].includes((subject || '').toLowerCase());
 
   const headerLabel = isScienceMath ? 'Formula Reference' : isSocialScience ? 'Key Dates & Facts' : isCommerce ? 'Key Terms & Rules' : 'Quick Reference';
-  const col1 = isSocialScience ? 'Event / Fact' : 'Name';
-  const col2 = isScienceMath ? 'Formula / Expression' : isSocialScience ? 'Date / Detail' : 'Rule / Keyword';
-  const col3 = isScienceMath ? 'Units / Exam Tip' : 'Notes';
+
+  /** Split notes into explanation sentences vs unit / dimension facts (shown as chips). */
+  const splitNotes = (notes: string) => {
+    const sentences = (notes || '').split(/(?<=\.)\s+(?=[A-Z])/).map(s => s.trim()).filter(Boolean);
+    const isUnit = (s: string) => /^(SI unit|Unit|Units|Dimensional formula|Dimensions?)\b/i.test(s);
+    return {
+      meaning: sentences.filter(s => !isUnit(s)),
+      units: sentences.filter(isUnit).map(s => s.replace(/\.$/, '')),
+    };
+  };
 
   return (
     <div className="mt-6">
@@ -187,26 +204,41 @@ const FormulaCarousel: React.FC<{ formulas: any[]; subject: string }> = ({ formu
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -60 }}
                 transition={{ duration: 0.25 }}
-                className="overflow-x-auto"
+                className="grid grid-cols-1 md:grid-cols-2 gap-3"
               >
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-emerald-50 border-b-2 border-emerald-200">
-                      <th className="px-2 sm:px-3 py-2 text-left text-[10px] font-black uppercase tracking-wider text-emerald-700">{col1}</th>
-                      <th className="px-2 sm:px-3 py-2 text-left text-[10px] font-black uppercase tracking-wider text-emerald-700">{col2}</th>
-                      <th className="px-2 sm:px-3 py-2 text-left text-[10px] font-black uppercase tracking-wider text-emerald-700 hidden sm:table-cell">{col3}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visible.map((row: any, i: number) => (
-                      <tr key={i} className={`border-b border-surface-container-high ${i % 2 === 0 ? 'bg-white' : 'bg-emerald-50/30'}`}>
-                        <td className="px-2 sm:px-3 py-2 text-xs font-bold text-on-surface">{row.name}</td>
-                        <td className="px-2 sm:px-3 py-2 text-xs text-on-surface font-mono font-semibold break-all">{row.formula}</td>
-                        <td className="px-2 sm:px-3 py-2 text-xs text-on-surface-variant leading-relaxed hidden sm:table-cell">{row.notes}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                {visible.map((row: any, i: number) => {
+                  const { meaning, units } = splitNotes(row.notes);
+                  return (
+                    <div key={i} className="flex flex-col rounded-xl border border-emerald-100 bg-white overflow-hidden">
+                      <div className="flex items-start gap-2 px-3 pt-3">
+                        <span className="shrink-0 w-5 h-5 rounded-md bg-emerald-100 text-emerald-700 text-[10px] font-black flex items-center justify-center">{start + i + 1}</span>
+                        <p className="text-xs font-black text-on-surface leading-snug">
+                          {isScienceMath ? <MathText text={row.name} mode="prose" /> : row.name}
+                        </p>
+                      </div>
+                      <div className="mx-3 my-2.5 px-3 py-3 rounded-lg bg-emerald-50 border border-emerald-100 text-[17px] text-emerald-950 leading-relaxed text-center overflow-x-auto">
+                        {isScienceMath ? <MathText text={row.formula} /> : <span className="font-semibold text-sm">{row.formula}</span>}
+                      </div>
+                      {meaning.length > 0 && (
+                        <div className="px-3 text-xs text-on-surface-variant leading-relaxed space-y-1">
+                          {meaning.map((s, k) => (
+                            <p key={k}>{isScienceMath ? <MathText text={s} mode="prose" /> : s}</p>
+                          ))}
+                        </div>
+                      )}
+                      {units.length > 0 && (
+                        <div className="px-3 pt-2 flex flex-wrap gap-1.5">
+                          {units.map((u, k) => (
+                            <span key={k} className="px-2 py-0.5 rounded-md bg-sky-50 border border-sky-100 text-[11px] font-semibold text-sky-800">
+                              <MathText text={u} mode="prose" />
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="pb-3" />
+                    </div>
+                  );
+                })}
               </motion.div>
             </AnimatePresence>
           </div>
@@ -242,17 +274,19 @@ const VocabCarousel: React.FC<{ vocab: any[] }> = ({ vocab }) => {
   return (
     <div className="flex flex-col items-center gap-3 h-full">
       <div className="w-full perspective-1000 flex-1 flex flex-col">
+        {/* Both faces share one grid cell, so the card grows to fit the longer
+            face (long definitions used to overflow a fixed-height box). */}
         <div
           onClick={() => setFlipped(!flipped)}
-          className="relative w-full min-h-[160px] cursor-pointer preserve-3d transition-transform duration-500 flex-1"
+          className="relative grid w-full cursor-pointer preserve-3d transition-transform duration-500 flex-1"
           style={{ transform: flipped ? 'rotateY(180deg)' : 'rotateY(0deg)' }}
         >
-          <div className="absolute inset-0 backface-hidden rounded-xl border-2 border-sky-300 bg-gradient-to-br from-sky-50 to-sky-100 p-5 flex flex-col items-center justify-center text-center shadow-sm">
+          <div className="[grid-area:1/1] min-h-[160px] backface-hidden rounded-xl border-2 border-sky-300 bg-gradient-to-br from-sky-50 to-sky-100 p-5 flex flex-col items-center justify-center text-center shadow-sm">
             <p className="text-[10px] font-black uppercase tracking-widest text-sky-400 mb-2">Term {idx + 1} / {vocab.length}</p>
             <p className="text-xl font-black text-sky-700">{cleanVocabText(v.word || v.term)}</p>
             <p className="text-[10px] text-sky-500 font-medium mt-3">Tap to reveal definition</p>
           </div>
-          <div className="absolute inset-0 backface-hidden rounded-xl border-2 border-sky-300 bg-gradient-to-br from-sky-600 to-sky-700 p-5 flex flex-col items-center justify-center text-center shadow-sm"
+          <div className="[grid-area:1/1] min-h-[160px] backface-hidden rounded-xl border-2 border-sky-300 bg-gradient-to-br from-sky-600 to-sky-700 p-5 flex flex-col items-center justify-center text-center shadow-sm"
             style={{ transform: 'rotateY(180deg)' }}
           >
             <p className="text-[10px] font-black uppercase tracking-widest text-sky-200 mb-2">Definition</p>
@@ -342,6 +376,7 @@ export const ReadWriteHub = ({
   );
 
   const isEnglish = (data?.subject || '').toLowerCase() === 'english';
+  const isMathChapter = isMathSubject(data?.subject);
   const isHindi = ['hindi', 'हिंदी', 'हिन्दी'].includes((data?.subject || '').toLowerCase());
 
   const examQuestions = useMemo(() => {
@@ -587,11 +622,34 @@ export const ReadWriteHub = ({
           {formulaTable.length > 0 && (
             <FormulaCarousel formulas={formulaTable} subject={subject} />
           )}
+
+          {/* ─── External References (left column, under formulas) ────── */}
+          {rwData.externalReferences?.length > 0 && (
+            <div className="mt-6 bg-white border border-surface-container-high rounded-2xl p-5 card-shadow">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-teal-600 text-white rounded-lg">
+                  <ExternalLink size={14} />
+                </div>
+                <h4 className="text-xs font-black text-on-surface uppercase tracking-widest">External References</h4>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {rwData.externalReferences.map((ref: string, i: number) => (
+                  <a key={i} href={ref} target="_blank" rel="noopener noreferrer" className="flex items-center justify-between gap-2 bg-surface-container-low p-3 rounded-lg border border-surface-container hover:border-teal-500 transition-all group">
+                    <div className="flex flex-col min-w-0">
+                      <span className="text-xs font-bold text-on-surface">Reference {i + 1}</span>
+                      <span className="text-[10px] text-on-surface-variant truncate">{ref}</span>
+                    </div>
+                    <ExternalLink size={14} className="shrink-0 text-on-surface-variant group-hover:text-teal-600" />
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ─── Right: Exam Answer Practice (40%, compact) ────────── */}
         <div className="lg:col-span-5">
-          <div ref={examRef} className="scroll-mt-20 bg-white border border-surface-container-high rounded-2xl overflow-hidden card-shadow lg:sticky lg:top-16">
+          <div ref={examRef} className="scroll-mt-20 bg-white border border-surface-container-high rounded-2xl overflow-hidden card-shadow">
             <div className="px-5 py-3.5 bg-violet-600 flex items-center gap-3">
               <Edit3 size={18} className="text-white" />
               <div>
@@ -685,7 +743,9 @@ export const ReadWriteHub = ({
                     <div className="flex items-center gap-2 p-2.5 bg-rose-50 border border-rose-200 rounded-lg">
                       <AlertTriangle size={12} className="text-rose-500 shrink-0" />
                       <p className="text-[10px] text-rose-700 font-medium flex-1">{examError}</p>
-                      <button onClick={handleExamSubmit} className="text-[10px] text-rose-600 font-bold underline shrink-0">Retry</button>
+                      {/requires (plus|pro)|upgrade/i.test(examError)
+                        ? <button onClick={() => setView('offers')} className="text-[10px] text-violet-700 font-bold underline shrink-0">See plans</button>
+                        : <button onClick={handleExamSubmit} className="text-[10px] text-rose-600 font-bold underline shrink-0">Retry</button>}
                     </div>
                   )}
                 </div>
@@ -761,44 +821,38 @@ export const ReadWriteHub = ({
               </div>
             </div>
           )}
-        </div>
-      </div>
 
-      {/* ─── Tips and Suggestions + External References (side by side) ── */}
-      <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-5 card-shadow">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-indigo-600 text-white rounded-lg">
-                <Sparkles size={14} />
-              </div>
-              <h4 className="text-xs font-black text-indigo-900 uppercase tracking-widest">Tips and Suggestions</h4>
-            </div>
-            <Lightbulb size={16} className="text-amber-500" />
-          </div>
-          <ul className="space-y-2">
-            {rwData.tips?.length > 0 ? rwData.tips.map((tip: string, i: number) => (
-              <li key={i} className="flex gap-2 items-start p-2.5 bg-white rounded-lg border border-indigo-100 text-xs font-medium text-on-surface-variant leading-relaxed">
-                <div className="shrink-0 w-5 h-5 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-black text-[10px]">{i + 1}</div>
-                {tip}
-              </li>
-            )) : <li className="text-[10px] text-on-surface-variant italic">No study tips yet.</li>}
-          </ul>
-        </div>
-        <div className="bg-surface-container-low border border-surface-container rounded-lg p-5">
-          <h4 className="text-xs font-bold text-on-surface-variant uppercase tracking-widest mb-3">External References</h4>
-          <div className="space-y-2.5">
-            {rwData.externalReferences?.length > 0 ? rwData.externalReferences.map((ref: string, i: number) => (
-              <a key={i} href={ref} target="_blank" rel="noopener noreferrer" className="flex items-center justify-between bg-white p-3 rounded border border-surface-container hover:border-teal-500 transition-all group shadow-sm">
-                <div className="flex flex-col">
-                  <span className="text-xs font-bold text-on-surface">Reference {i + 1}</span>
-                  <span className="text-[10px] text-on-surface-variant truncate max-w-[200px]">{ref}</span>
+          {/* ─── Tips and Suggestions — fills the right column under vocabulary.
+               Sticky, so it stays in view while the (longer) notes column scrolls. ── */}
+          <div className="mt-4 bg-indigo-50 border border-indigo-100 rounded-2xl p-5 card-shadow lg:sticky lg:top-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-indigo-600 text-white rounded-lg">
+                  <Sparkles size={14} />
                 </div>
-                <ExternalLink size={14} className="text-on-surface-variant group-hover:text-teal-600" />
-              </a>
-            )) : (
-              <p className="text-[10px] text-on-surface-variant italic">No external references.</p>
+                <h4 className="text-xs font-black text-indigo-900 uppercase tracking-widest">Tips and Suggestions</h4>
+              </div>
+              <Lightbulb size={16} className="text-amber-500" />
+            </div>
+            {rwData.tips?.length > 0 && (
+              <ul className="space-y-2 mb-4">
+                {rwData.tips.map((tip: string, i: number) => (
+                  <li key={i} className="flex gap-2 items-start p-2.5 bg-white rounded-lg border border-indigo-100 text-xs font-medium text-on-surface-variant leading-relaxed">
+                    <div className="shrink-0 w-5 h-5 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-black text-[10px]">{i + 1}</div>
+                    <span>{isMathChapter ? <MathText text={tip} mode="prose" /> : tip}</span>
+                  </li>
+                ))}
+              </ul>
             )}
+            <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500 mb-2">Revising with Cornell notes</p>
+            <ul className="space-y-1.5">
+              {CORNELL_REVISION_TIPS.map((tip, i) => (
+                <li key={i} className="flex gap-2 items-start text-xs text-indigo-900/80 leading-relaxed">
+                  <CheckCircle size={13} className="shrink-0 mt-0.5 text-indigo-400" />
+                  {tip}
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
       </div>

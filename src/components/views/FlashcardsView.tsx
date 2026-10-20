@@ -41,7 +41,7 @@ export const FlashcardsView = ({ set, isLoading, error, setView, onRetry }: Flas
         <p className="text-on-surface-variant font-bold uppercase tracking-widest text-sm animate-pulse">
           Generating flashcards…
         </p>
-        <p className="text-xs text-on-surface-variant/60">This usually takes 5–10 seconds</p>
+        <p className="text-xs text-on-surface-variant/60">This usually takes 10–30 seconds</p>
       </div>
     );
   }

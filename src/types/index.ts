@@ -336,6 +336,14 @@ export interface ExamOutline {
 export interface SmartSlide {
   slide_number: number;
   title: string;
+  /** Cornell method (v3) — left cue column */
+  cue_points?: string[];
+  cue_questions?: string[];
+  diagram_cue?: string;
+  /** Cornell method (v3) — concise shorthand lines in the notes column */
+  notes_points?: string[];
+  /** Cornell method (v3) — bottom summary strip for this page */
+  summary?: string;
   definitions?: { term: string; definition: string; example?: string }[];
   tables?: { label: string; columns: string[]; rows: string[][] }[];
   comparison_panels?: { left: { title: string; content: string }; right: { title: string; content: string } }[];
@@ -343,6 +351,8 @@ export interface SmartSlide {
   formulae?: { label: string; formula: string }[];
   step_method?: { label: string; steps: string[] };
   solved_example?: { mark_pattern: string; question: string; steps: string[]; answer: string };
+  /** v4 — NCERT derivations for this page's topics (CBSE 3/5-mark) */
+  derivations?: { title: string; marks?: string; given?: string; steps: string[]; result?: string }[];
   common_mistake?: string;
   exam_tip?: string;
 }
@@ -361,6 +371,10 @@ export interface GeneratedNotes {
   conceptConnections?: ConceptConnection[];
   knowledgeCards?: KnowledgeCard[];
   examOutline?: ExamOutline;
+  /** Format version: 1 sections, 2 dense slides, 3 Cornell, 4 Cornell + derivations */
+  noteVersion?: number;
+  /** NCERT topics whose parallel generation part failed (notes are partial) */
+  incompleteTopics?: string[];
   /** Dense slide format (v2) — used by SMART notes */
   slides?: SmartSlide[];
 }

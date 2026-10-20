@@ -610,7 +610,9 @@ export const AnalyticsView = ({ library, activeTab: externalActiveTab, setActive
                 </div>
                 <h2 className="text-4xl font-black text-on-surface tracking-tight">{currentTopic || latestAttempt.chapterTitle || latestAttempt.topic}</h2>
                 <p className="text-on-surface-variant font-medium max-w-2xl leading-relaxed">
-                  {quizHistory.some(q => q.topic === (currentTopic || latestAttempt.topic))
+                  {/* Same match rule as latestAttempt: kit titles carry suffixes like
+                      "Revision Kit (Academic Year 2025-26)", so also compare chapterTitle */}
+                  {quizHistory.some(q => q.topic === (currentTopic || latestAttempt.topic) || (!!q.chapterTitle && q.chapterTitle === (currentTopic || latestAttempt.chapterTitle)))
                     ? 'Knowledge map based on your quiz attempts for this chapter.'
                     : `No quiz data yet for "${currentTopic}". Take a quiz on this chapter to see its analytics.`}
                 </p>

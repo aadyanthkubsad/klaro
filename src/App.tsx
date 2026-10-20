@@ -821,16 +821,16 @@ export default function App() {
                     {cfg.secondaryLabel}
                   </button>
                 )}
-                <button
-                  onClick={() => setPaywallOpen(null)}
-                  className="w-full py-2 text-on-surface-variant/60 text-[11px] hover:bg-surface-container-low rounded-xl"
-                >
-                  Not now
-                </button>
+                {/* Only add a plain "Not now" when the caller didn't supply its own secondary action */}
+                {!cfg.secondaryLabel && (
+                  <button
+                    onClick={() => setPaywallOpen(null)}
+                    className="w-full py-2 text-on-surface-variant/60 text-[11px] hover:bg-surface-container-low rounded-xl"
+                  >
+                    Not now
+                  </button>
+                )}
               </div>
-              <p className="mt-5 text-[10px] text-on-surface-variant/60 text-center">
-                Payment integration coming soon. For now, use the DEV button to preview Pro.
-              </p>
             </div>
           </div>
         );

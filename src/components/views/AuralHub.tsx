@@ -18,6 +18,8 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AIGuide } from '../common/AIGuide';
+import { MathText } from '../common/MathText';
+import { isMathSubject } from '../../utils/mathFormat';
 
 import { speak, stopSpeaking } from '../../lib/tts';
 import { exportKitToPDF, setLastLearningMode } from '../../lib/pdfExport';
@@ -855,6 +857,7 @@ export const AuralHub = ({
           {/* 3. Formula Sheet / Quick Reference */}
           {(() => {
             const formulas = data.formulaTable || [];
+            const isMath = isMathSubject(data.subject);
             const defs = Array.isArray(data.definitions) ? data.definitions : (data.summary?.definitions || []);
             if (formulas.length === 0 && defs.length === 0) return null;
             return (
@@ -872,8 +875,8 @@ export const AuralHub = ({
                     formulas.map((row: any, i: number) => (
                       <div key={i} className="p-2.5 bg-emerald-50 rounded-lg border border-emerald-100">
                         <p className="text-xs font-bold text-emerald-800">{row.name}</p>
-                        <p className="text-[11px] text-emerald-700 font-mono font-semibold mt-0.5">{row.formula}</p>
-                        {row.notes && <p className="text-[10px] text-emerald-600 mt-0.5">{row.notes}</p>}
+                        <p className="text-sm text-emerald-800 font-semibold mt-0.5">{isMath ? <MathText text={row.formula} /> : row.formula}</p>
+                        {row.notes && <p className="text-[10px] text-emerald-600 mt-0.5">{isMath ? <MathText text={row.notes} mode="prose" /> : row.notes}</p>}
                       </div>
                     ))
                   ) : (

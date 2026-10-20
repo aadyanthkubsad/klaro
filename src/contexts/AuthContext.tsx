@@ -136,6 +136,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem('lumina:plan');
     localStorage.removeItem('lumina:user-email');
+    // Clear the signed-out student's personal study data (activity, streak, quiz
+    // history, mistakes, mastery, tasks…) so the next person on this device starts
+    // clean. Keep device preferences and the generic chapter-notes cache.
+    const KEEP = new Set(['lumina:theme', 'lumina:migrated-from-klaro']);
+    Object.keys(localStorage)
+      .filter(k => /^(lumina|varkify|klaro):/.test(k) && !KEEP.has(k) && !k.startsWith('lumina:notes:'))
+      .forEach(k => localStorage.removeItem(k));
     setToken(null);
     setUser(null);
   };

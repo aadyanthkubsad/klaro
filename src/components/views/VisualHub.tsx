@@ -7,6 +7,8 @@ import React, { useState, useMemo, useCallback } from 'react';
 import { Library, RotateCcw, Network, Lightbulb, Sparkles, ClipboardCheck, Download, GitBranch, Layers, ArrowRight, ChevronLeft, ChevronRight, Clock } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AIGuide } from '../common/AIGuide';
+import { MathText } from '../common/MathText';
+import { isMathSubject } from '../../utils/mathFormat';
 import { EnglishGlossPanel } from '../common/EnglishGlossPanel';
 import { exportKitToPDF, setLastLearningMode } from '../../lib/pdfExport';
 import { UserStats } from '../../types';
@@ -26,7 +28,7 @@ interface VisualHubProps {
 
 const VIS_FORMULAS_PER_PAGE = 4;
 
-const VisualFormulaCarousel: React.FC<{ formulas: any[] }> = ({ formulas }) => {
+const VisualFormulaCarousel: React.FC<{ formulas: any[]; math?: boolean }> = ({ formulas, math }) => {
   const [fPage, setFPage] = useState(0);
   const totalPages = Math.ceil(formulas.length / VIS_FORMULAS_PER_PAGE);
   const start = fPage * VIS_FORMULAS_PER_PAGE;
@@ -81,8 +83,8 @@ const VisualFormulaCarousel: React.FC<{ formulas: any[] }> = ({ formulas }) => {
                   {visible.map((row: any, i: number) => (
                     <tr key={i} className={`border-b border-surface-container-high ${i % 2 === 0 ? 'bg-white' : 'bg-emerald-50/30'}`}>
                       <td className="px-4 py-3 text-xs font-bold text-on-surface whitespace-nowrap">{row.name}</td>
-                      <td className="px-4 py-3 text-xs text-on-surface font-mono font-semibold">{row.formula}</td>
-                      <td className="px-4 py-3 text-xs text-on-surface-variant leading-relaxed">{row.notes}</td>
+                      <td className="px-4 py-3 text-sm text-on-surface font-semibold">{math ? <MathText text={row.formula} /> : row.formula}</td>
+                      <td className="px-4 py-3 text-xs text-on-surface-variant leading-relaxed">{math ? <MathText text={row.notes} mode="prose" /> : row.notes}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -561,7 +563,7 @@ export const VisualHub = ({ setView, onSave, kit, stats, saveMistake, openFlashc
 
           {/* ── Formula Revision Carousel ───────────────────────────────── */}
           {formulaTable.length > 0 && (
-            <VisualFormulaCarousel formulas={formulaTable} />
+            <VisualFormulaCarousel formulas={formulaTable} math={isMathSubject(data.subject)} />
           )}
 
           {/* ── English Gloss Panel ─────────────────────────────────────── */}

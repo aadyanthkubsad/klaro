@@ -8,6 +8,7 @@ import { XCircle, CheckCircle2, ArrowRight, Rocket, Lightbulb, ChevronLeft, Chev
 import { motion, AnimatePresence } from 'motion/react';
 import { UserStats } from '../../types';
 import { getMistakes, onLearningChange } from '../../services/learningService';
+import { formatShortDate } from '../../utils/formatDate';
 
 interface MistakesNotebookProps {
   stats: UserStats;
@@ -44,7 +45,7 @@ const MistakeCard = ({ m, mode, isRepeated }: { m: any, mode: string, isRepeated
       {/* Header */}
       <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
         <span className="px-3 py-1 bg-surface-container-low text-on-surface-variant rounded-lg text-[10px] font-black uppercase tracking-wider">
-          {mode.toUpperCase()} {m.date ? `· ${m.date}` : ''}
+          {mode.toUpperCase()} {m.date ? `· ${formatShortDate(m.date, { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}
         </span>
         {isRepeated && (
           <span className="flex items-center gap-1.5 text-rose-600 bg-rose-50 px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider border border-rose-100">
