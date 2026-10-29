@@ -411,10 +411,10 @@ export function upsertQuizAttempts(userId: string, attempts: any[]): void {
     for (const a of attempts) {
       upsert.run(
         a.id, userId, a.topic || '', a.chapterTitle || a.chapter_title || '', a.subject || '',
-        a.score || 0, a.total || 0, a.percentage || 0,
+        a.score || 0, a.totalQuestions || a.total || 0, a.percentage || 0,
         JSON.stringify(a.weakTopics || a.weak_topics || []),
         JSON.stringify(a.answers || []),
-        a.modeUsed || a.mode_used || '', a.createdAt || a.created_at || new Date().toISOString()
+        a.modeUsed || a.mode_used || '', a.date || a.createdAt || a.created_at || new Date().toISOString()
       );
     }
   });
@@ -439,7 +439,7 @@ export function upsertMistakeEntries(userId: string, entries: any[]): void {
         e.id, userId, e.quizId || e.quiz_id || '', e.topic || '', e.question || '',
         e.selectedAnswer || e.selected_answer || '', e.correctAnswer || e.correct_answer || '',
         e.explanation || '', e.topicTag || e.topic_tag || '',
-        e.modeUsed || e.mode_used || '', e.createdAt || e.created_at || new Date().toISOString()
+        e.modeUsed || e.mode_used || '', e.date || e.createdAt || e.created_at || new Date().toISOString()
       );
     }
   });
@@ -605,7 +605,7 @@ export function upsertWrittenAnswers(userId: string, answers: any[]): void {
         JSON.stringify(a.missingKeywords || a.missing_keywords || []),
         JSON.stringify(a.strengths || []), JSON.stringify(a.improvements || []),
         a.modelAnswer || a.model_answer || '',
-        a.createdAt || a.created_at || new Date().toISOString()
+        a.date || a.createdAt || a.created_at || new Date().toISOString()
       );
     }
   });

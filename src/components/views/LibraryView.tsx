@@ -13,6 +13,7 @@ import { CLASS10_SYLLABUS, SUBJECTS, ChapterItem, ChapterSubject, searchSyllabus
 import { ClassLevel, Stream, getSubjectsForClass, searchSyllabusAll, SyllabusChapter } from '../../data/syllabus';
 import { getActiveVersion } from '../../data/syllabusVersions';
 import { PAPER_CATALOGUE, PAPER_SUBJECTS, PAPER_YEARS, PAPER_TYPES, filterPapers } from '../../data/previousYearPapers';
+import { formatShortDate } from '../../utils/formatDate';
 
 interface LibraryViewProps {
   library: LibraryItem[];
@@ -35,8 +36,7 @@ interface LibraryViewProps {
 }
 
 function fmtDate(iso?: string) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  return formatShortDate(iso);
 }
 function statusPillStyle(s: RevisionStatus) {
   if (s === 'overdue')   return 'bg-rose-100 text-rose-800';

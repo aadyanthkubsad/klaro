@@ -571,12 +571,15 @@ export default function App() {
                     {cfg.secondaryLabel}
                   </button>
                 )}
-                <button
-                  onClick={() => closePaywall()}
-                  className="w-full py-2 text-on-surface-variant/60 text-[11px] hover:bg-surface-container-low rounded-xl"
-                >
-                  Not now
-                </button>
+                {/* Only add a plain "Not now" when the caller didn't supply its own secondary action */}
+                {!cfg.secondaryLabel && (
+                  <button
+                    onClick={() => closePaywall()}
+                    className="w-full py-2 text-on-surface-variant/60 text-[11px] hover:bg-surface-container-low rounded-xl"
+                  >
+                    Not now
+                  </button>
+                )}
               </div>
               <p className="mt-5 text-[10px] text-on-surface-variant/60 text-center">
                 Secure payments via Razorpay &mdash; a <a href="https://www.bhuviona.com/" target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: '#00BCD4' }}>Bhuviona Technologies</a> product.

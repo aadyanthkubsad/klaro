@@ -37,13 +37,14 @@ export async function pullFromServer(): Promise<void> {
 
     if (d.quizHistory?.length) {
       const local = readLocal('varkify:quizHistory', []);
-      const merged = mergeById(local, d.quizHistory.map(mapQuizFromServer));
+      // Local copy wins — it carries fields the server doesn't store (chapterId, …)
+      const merged = mergeById(d.quizHistory.map(mapQuizFromServer), local);
       writeLocal('varkify:quizHistory', merged);
     }
 
     if (d.mistakes?.length) {
       const local = readLocal('varkify:mistakeNotebook', []);
-      const merged = mergeById(local, d.mistakes.map(mapMistakeFromServer));
+      const merged = mergeById(d.mistakes.map(mapMistakeFromServer), local);
       writeLocal('varkify:mistakeNotebook', merged);
     }
 
@@ -83,7 +84,8 @@ export async function pullFromServer(): Promise<void> {
 
     if (d.writtenAnswers?.length) {
       const local = readLocal('lumina:writtenAnswers', []);
-      const merged = mergeById(local, d.writtenAnswers.map(mapWrittenFromServer));
+      // Local copy wins: the server doesn't store topic / subject / examTip / answerMode
+      const merged = mergeById(d.writtenAnswers.map(mapWrittenFromServer), local);
       writeLocal('lumina:writtenAnswers', merged);
     }
   } catch {
@@ -187,10 +189,12 @@ function mergeByField(local: any[], server: any[], field: string): any[] {
 function mapQuizFromServer(row: any): any {
   return {
     id: row.id, topic: row.topic, chapterTitle: row.chapter_title, subject: row.subject,
-    score: row.score, total: row.total, percentage: row.percentage,
+    // Client QuizAttempt uses `totalQuestions` / `date` (not `total` / `createdAt`)
+    score: row.score, totalQuestions: row.total, percentage: row.percentage,
+    correctCount: row.score, wrongCount: Math.max(0, (row.total || 0) - (row.score || 0)),
     weakTopics: typeof row.weak_topics === 'string' ? JSON.parse(row.weak_topics) : row.weak_topics || [],
     answers: typeof row.answers === 'string' ? JSON.parse(row.answers) : row.answers || [],
-    modeUsed: row.mode_used, createdAt: row.created_at,
+    modeUsed: row.mode_used, date: row.created_at || new Date().toISOString(),
   };
 }
 
@@ -199,7 +203,7 @@ function mapMistakeFromServer(row: any): any {
     id: row.id, quizId: row.quiz_id, topic: row.topic, question: row.question,
     selectedAnswer: row.selected_answer, correctAnswer: row.correct_answer,
     explanation: row.explanation, topicTag: row.topic_tag, modeUsed: row.mode_used,
-    createdAt: row.created_at,
+    date: row.created_at || new Date().toISOString(),
   };
 }
 
@@ -240,6 +244,8 @@ function mapWrittenFromServer(row: any): any {
     missingKeywords: typeof row.missing_keywords === 'string' ? JSON.parse(row.missing_keywords) : row.missing_keywords || [],
     strengths: typeof row.strengths === 'string' ? JSON.parse(row.strengths) : row.strengths || [],
     improvements: typeof row.improvements === 'string' ? JSON.parse(row.improvements) : row.improvements || [],
-    modelAnswer: row.model_answer, createdAt: row.created_at,
+    // Client WrittenAnswerAttempt uses `date` (was mapped to `createdAt`, which left
+    // synced answers without a date and crashed the Progress view).
+    modelAnswer: row.model_answer, date: row.created_at || new Date().toISOString(),
   };
 }

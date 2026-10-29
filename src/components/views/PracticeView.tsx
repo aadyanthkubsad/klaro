@@ -15,6 +15,9 @@ import { UserStats, LearningMode } from '../../types';
 import { aiService, QuizQuestion } from '../../services/aiService';
 import { recordCompletedQuiz } from '../../services/learningService';
 
+/** In-flight quiz generations, shared across (re)mounts. */
+const inFlightQuizzes = new Map<string, ReturnType<typeof aiService.generateQuiz>>();
+
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 interface AnswerRecord {
@@ -171,15 +174,23 @@ export const PracticeView = ({
         ? kit.summary
         : (kit?.summary?.text || kit?.summary?.executiveSummary || '');
 
-      const result = await aiService.generateQuiz({
-        topic:      topicName,
-        classLevel: kit?.classLevel || 'Class 10',
-        examMode:   'CBSE',
-        sourceText,
-        weakTopics: stats.weakTopics || [],
-        count:      25,
-        subject:    kit?.subject || kit?.detectedSubject || '',
-      });
+      // Share one in-flight request per topic: StrictMode (dev) mounts twice, and a
+      // second request would cost AI quota and swap the questions mid-attempt.
+      const key = `${topicName}|${kit?.classLevel || ''}`;
+      let request = inFlightQuizzes.get(key);
+      if (!request) {
+        request = aiService.generateQuiz({
+          topic:      topicName,
+          classLevel: kit?.classLevel || 'Class 10',
+          examMode:   'CBSE',
+          sourceText,
+          weakTopics: stats.weakTopics || [],
+          count:      25,
+          subject:    kit?.subject || kit?.detectedSubject || '',
+        }).finally(() => inFlightQuizzes.delete(key));
+        inFlightQuizzes.set(key, request);
+      }
+      const result = await request;
 
       if (!result.questions?.length) throw new Error('No questions returned. Please try again.');
       startQuiz(result.questions, result.topic || topicName);
@@ -309,7 +320,7 @@ export const PracticeView = ({
         <p className="text-on-surface-variant font-bold uppercase tracking-widest text-sm animate-pulse">
           Generating quiz questions…
         </p>
-        <p className="text-xs text-on-surface-variant/60">This usually takes 5–10 seconds</p>
+        <p className="text-xs text-on-surface-variant/60">This usually takes 20–40 seconds</p>
       </div>
     );
   }

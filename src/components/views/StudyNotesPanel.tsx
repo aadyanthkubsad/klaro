@@ -13,12 +13,14 @@ import {
   Sparkles, Brain, ListTree, Table2, RotateCcw, GitFork, Layers,
   ChevronDown, AlertCircle, AlertTriangle, Loader2, Lock, Download,
   BookOpen, Lightbulb, CheckCircle, ArrowRight, HelpCircle, Star,
-  FileText, Zap, RefreshCw,
+  FileText, Zap, RefreshCw, PenTool,
 } from 'lucide-react';
 import { aiService } from '../../services/aiService';
 import { NoteStyle, GeneratedNotes, PlanType, SmartSlide } from '../../types';
 import { exportKitToPDF } from '../../lib/pdfExport';
 import { logActivity } from '../../services/activityService';
+import { MathText } from '../common/MathText';
+import { isMathSubject } from '../../utils/mathFormat';
 
 // ─── Style metadata ──────────────────────────────────────────────────────────
 
@@ -35,20 +37,57 @@ interface StyleMeta {
 }
 
 const STYLES: StyleMeta[] = [
+  // Smart Notes use the Cornell method (cues · notes · summary) for every subject.
+  // Cornell / Concept Map were separate styles before — now folded into Smart.
   { id: 'smart', label: 'Smart Notes', shortLabel: 'Smart', icon: Sparkles,
-    desc: 'Structured notes + tables + definitions + exam tips.',
+    desc: 'Cornell method — cue questions, concise notes and a summary on every page.',
     color: 'text-teal-700', bg: 'bg-teal-50', border: 'border-teal-400', minPlan: 'free' },
-  { id: 'cornell', label: 'Cornell Notes', shortLabel: 'Cornell', icon: FileText,
-    desc: 'Two-column format · Cue questions · Summary for review.',
-    color: 'text-indigo-700', bg: 'bg-indigo-50', border: 'border-indigo-400', minPlan: 'plus' },
-  { id: 'concept-map', label: 'Concept Map', shortLabel: 'Concept Map', icon: GitFork,
-    desc: 'Visual relationship mapping between concepts.',
-    color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-400', minPlan: 'pro' },
 ];
 
 const PLAN_ORDER: Record<PlanType, number> = { free: 0, plus: 1, pro: 2 };
 function planAllows(userPlan: PlanType, required: PlanType) {
   return PLAN_ORDER[userPlan] >= PLAN_ORDER[required];
+}
+
+// ─── Notes cache + in-flight registry ────────────────────────────────────────
+// Generating a full chapter takes 30-90s. The panel unmounts whenever the student
+// switches revision tabs, so we (a) keep in-flight requests at module level and
+// re-attach to them on remount instead of starting over, and (b) cache finished
+// notes in localStorage so reopening a chapter from the Library is instant.
+
+const NOTES_CACHE_PREFIX = 'lumina:notes:';
+const NOTES_CACHE_MAX = 20;
+const inFlightNotes = new Map<string, Promise<GeneratedNotes>>();
+
+function notesCacheKey(kit: any, topic: string, style: NoteStyle): string {
+  const base = kit?.id
+    ? `id:${kit.id}`
+    : [kit?.classLevel || '', kit?.subject || '', topic, kit?.language || 'en'].join('|').toLowerCase();
+  return `${base}|${style}`;
+}
+
+function readCachedNotes(key: string): GeneratedNotes | null {
+  try {
+    const raw = window.localStorage.getItem(NOTES_CACHE_PREFIX + key);
+    return raw ? (JSON.parse(raw).notes as GeneratedNotes) : null;
+  } catch { return null; }
+}
+
+function writeCachedNotes(key: string, notes: GeneratedNotes) {
+  try {
+    const ls = window.localStorage;
+    // Evict oldest entries beyond the cap (each chapter is ~30-60 KB).
+    const entries: { k: string; ts: number }[] = [];
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i);
+      if (k?.startsWith(NOTES_CACHE_PREFIX) && k !== NOTES_CACHE_PREFIX + key) {
+        try { entries.push({ k, ts: JSON.parse(ls.getItem(k) || '{}').ts || 0 }); } catch { entries.push({ k, ts: 0 }); }
+      }
+    }
+    entries.sort((a, b) => a.ts - b.ts);
+    while (entries.length >= NOTES_CACHE_MAX) ls.removeItem(entries.shift()!.k);
+    ls.setItem(NOTES_CACHE_PREFIX + key, JSON.stringify({ ts: Date.now(), notes }));
+  } catch { /* quota exceeded / storage disabled — cache is best-effort */ }
 }
 
 function getRecommendedStyle(subject: string): NoteStyle {
@@ -175,7 +214,10 @@ const EH = { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emer
 
 const SL = { label: 'text-[10px] font-black uppercase tracking-widest text-on-surface-variant mb-2' };
 
-const DenseSlide: React.FC<{ slide: SmartSlide }> = ({ slide }) => (
+/** Science/maths text gets Greek letters, sub/superscripts and fractions; other subjects stay plain. */
+const fmt = (t: string, math?: boolean): React.ReactNode => (math ? <MathText text={t} mode="prose" /> : t);
+
+const DenseSlide: React.FC<{ slide: SmartSlide; math?: boolean }> = ({ slide, math }) => (
   <div className="space-y-4">
     {/* Definitions */}
     {slide.definitions?.length > 0 && (
@@ -184,7 +226,7 @@ const DenseSlide: React.FC<{ slide: SmartSlide }> = ({ slide }) => (
           {slide.definitions.filter(Boolean).map((d, i) => (
             <li key={i} className="flex items-start gap-2 text-sm text-on-surface leading-relaxed">
               <span className="shrink-0 w-2 h-2 rounded-full bg-teal-500 mt-2" />
-              <span><strong className="text-teal-800">{d?.term || ''}</strong> — {d?.definition || ''}
+              <span><strong className="text-teal-800">{fmt(d?.term || '', math)}</strong> — {fmt(d?.definition || '', math)}
                 {d?.example && <span className="text-on-surface-variant"> ({d.example})</span>}
               </span>
             </li>
@@ -225,25 +267,26 @@ const DenseSlide: React.FC<{ slide: SmartSlide }> = ({ slide }) => (
       <div key={ci} className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
         <div className="border-l-2 border-blue-400 pl-3 py-2">
           <p className="text-xs font-black text-blue-700 mb-1">{cp.left.title || ''}</p>
-          <p className="text-xs text-on-surface-variant leading-relaxed">{cp.left.content || ''}</p>
+          <p className="text-sm text-on-surface-variant leading-relaxed">{fmt(cp.left.content || '', math)}</p>
         </div>
         <div className="border-l-2 border-amber-400 pl-3 py-2">
           <p className="text-xs font-black text-amber-700 mb-1">{cp.right.title || ''}</p>
-          <p className="text-xs text-on-surface-variant leading-relaxed">{cp.right.content || ''}</p>
+          <p className="text-sm text-on-surface-variant leading-relaxed">{fmt(cp.right.content || '', math)}</p>
         </div>
       </div>
     ) : null)}
 
-    {/* Compact Grid */}
+    {/* Compact Grid — rendered like definitions (term — statement) so long
+        statements such as laws/principles stay readable */}
     {slide.compact_grid?.length > 0 && (
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+      <ul className="space-y-1.5">
         {slide.compact_grid.filter(Boolean).map((item, i) => (
-          <div key={i} className="bg-surface-container-low rounded-lg p-2 sm:p-2.5 text-center border border-surface-container-high">
-            <p className="text-xs sm:text-sm font-black text-on-surface break-words">{item?.primary || ''}</p>
-            <p className="text-[10px] text-on-surface-variant mt-0.5">{item?.secondary || ''}</p>
-          </div>
+          <li key={i} className="flex items-start gap-2 text-sm text-on-surface leading-relaxed">
+            <span className="shrink-0 w-2 h-2 rounded-full bg-teal-500 mt-2" />
+            <span><strong className="text-teal-800">{fmt(item?.primary || '', math)}</strong>{item?.secondary ? <> — {fmt(item.secondary, math)}</> : null}</span>
+          </li>
         ))}
-      </div>
+      </ul>
     )}
 
     {/* Formulae */}
@@ -254,7 +297,9 @@ const DenseSlide: React.FC<{ slide: SmartSlide }> = ({ slide }) => (
           {slide.formulae.filter(Boolean).map((f, i) => (
             <div key={i} className="bg-surface-container-low rounded-lg p-2 sm:p-2.5 border border-surface-container-high">
               <p className="text-[10px] text-on-surface-variant font-bold mb-0.5">{f?.label || ''}</p>
-              <p className="text-xs font-mono font-bold text-on-surface break-all">{f?.formula || ''}</p>
+              <p className="text-sm font-semibold text-on-surface">
+                {math ? <MathText text={f?.formula || ''} /> : <span className="font-mono text-xs">{f?.formula || ''}</span>}
+              </p>
             </div>
           ))}
         </div>
@@ -275,6 +320,33 @@ const DenseSlide: React.FC<{ slide: SmartSlide }> = ({ slide }) => (
         </div>
       </div>
     )}
+
+    {/* Derivations (CBSE 3/5-mark) */}
+    {slide.derivations?.filter(d => d?.steps?.length).map((d, di) => (
+      <div key={di} className="rounded-lg border border-indigo-200 bg-indigo-50/40 overflow-hidden">
+        <div className="flex items-center gap-2 px-3 py-2 bg-indigo-100/70 border-b border-indigo-200">
+          <p className="text-[10px] font-black uppercase tracking-widest text-indigo-700">Derivation</p>
+          {d.marks && <span className="px-1.5 py-0.5 rounded bg-white text-[9px] font-black uppercase text-indigo-600 border border-indigo-200">{d.marks}</span>}
+        </div>
+        <div className="p-3 space-y-2">
+          <p className="text-sm font-black text-on-surface">{fmt(d.title || '', math)}</p>
+          {d.given && <p className="text-xs text-on-surface-variant italic leading-relaxed">{fmt(d.given, math)}</p>}
+          <ol className="space-y-1.5">
+            {d.steps.filter(Boolean).map((st, si) => (
+              <li key={si} className="flex items-start gap-2 text-sm text-on-surface leading-relaxed">
+                <span className="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px] font-black mt-0.5">{si + 1}</span>
+                <span className="min-w-0">{fmt(st.replace(/^\s*(step\s*)?\d+\s*[:.)-]\s*/i, ''), math)}</span>
+              </li>
+            ))}
+          </ol>
+          {d.result && (
+            <div className="mt-1 px-3 py-2 rounded-md bg-white border-2 border-indigo-300 text-center text-base text-indigo-950">
+              {math ? <MathText text={d.result} /> : d.result}
+            </div>
+          )}
+        </div>
+      </div>
+    ))}
 
     {/* Solved Example */}
     {slide.solved_example && (
@@ -310,34 +382,137 @@ const DenseSlide: React.FC<{ slide: SmartSlide }> = ({ slide }) => (
   </div>
 );
 
-const DenseSlideshow: React.FC<{ slides: SmartSlide[]; summary?: string; keyPoints?: string[] }> = ({ slides, summary, keyPoints }) => {
-  const [current, setCurrent] = React.useState(0);
-  const slide = slides[current];
-  if (!slide) return null;
+/* ── Cornell page (v3 SMART format) ──────────────────────────────────────────
+ * Cornell method: narrow CUES column (main ideas, questions, diagram prompt) |
+ * wide NOTES column (concise shorthand lines + rich blocks) | SUMMARY strip.
+ * Older v2 slides without cue fields get cues derived from their content.
+ */
 
+function cornellCues(slide: SmartSlide) {
+  const defs = (slide.definitions || []).filter(d => d?.term);
+  const formulae = (slide.formulae || []).filter(f => f?.label);
+  const points = slide.cue_points?.length
+    ? slide.cue_points
+    : [...defs.map(d => d.term), ...(slide.tables || []).map(t => t?.label).filter(Boolean), ...formulae.map(f => f.label)].slice(0, 4);
+  const questions = slide.cue_questions?.length
+    ? slide.cue_questions
+    : [
+        ...defs.slice(0, 2).map(d => `Define ${d.term}.`),
+        ...formulae.slice(0, 1).map(f => `Write the formula for ${f.label}.`),
+        ...(slide.solved_example?.question ? [`Solve the ${slide.solved_example.mark_pattern || 'numerical'} on this page without looking.`] : []),
+      ].slice(0, 4);
+  return { points, questions, diagram: slide.diagram_cue || '' };
+}
+
+const CueLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <p className="text-[10px] font-black uppercase tracking-widest text-rose-700/80 mb-1.5">{children}</p>
+);
+
+const CornellPage: React.FC<{ slide: SmartSlide; index: number; total: number; math?: boolean }> = ({ slide, index, total, math }) => {
+  const cues = cornellCues(slide);
+  const txt = (t: string) => (math ? <MathText text={t} mode="prose" /> : t);
   return (
-    <div className="space-y-4">
-      {/* Chapter Summary — visible only on slide 1 */}
-      {current === 0 && summary && (
-        <div className="p-4 bg-teal-50/70 rounded-xl border border-teal-200">
-          <p className="text-[10px] font-black uppercase tracking-widest text-teal-600 mb-1.5">Chapter Summary</p>
-          <p className="text-sm text-on-surface leading-relaxed">{summary}</p>
-          {keyPoints && keyPoints.length > 0 && (
-            <div className="mt-3 pt-3 border-t border-teal-200/60">
-              <p className="text-[10px] font-black uppercase tracking-widest text-teal-500 mb-1.5">Key Points</p>
+    <div className="rounded-xl border-2 border-teal-400 bg-white overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-surface-container-high bg-teal-50/40">
+        <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase text-teal-700 bg-teal-100">{index + 1} / {total}</span>
+        <h4 className="text-sm font-black text-teal-800">{slide.title || `Page ${index + 1}`}</h4>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,2.5fr)_minmax(0,6fr)]">
+        {/* ── Cues column ── */}
+        <aside className="bg-rose-50 border-b md:border-b-0 md:border-r-2 border-rose-200 p-4 space-y-4">
+          <p className="text-base font-black text-rose-900 leading-none">Cues</p>
+          {cues.points.length > 0 && (
+            <div>
+              <CueLabel>Main ideas</CueLabel>
               <ul className="space-y-1">
-                {keyPoints.slice(0, 5).map((pt, i) => (
-                  <li key={i} className="flex items-start gap-2 text-xs text-on-surface leading-relaxed">
-                    <span className="shrink-0 w-4 h-4 rounded-full bg-teal-100 text-teal-700 flex items-center justify-center text-[9px] font-black mt-0.5">{i + 1}</span>
-                    {pt}
+                {cues.points.map((pt, i) => (
+                  <li key={i} className="flex items-start gap-1.5 text-xs font-bold text-rose-900 leading-snug">
+                    <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-rose-400 mt-1.5" />{txt(pt)}
                   </li>
                 ))}
               </ul>
             </div>
           )}
+          {cues.questions.length > 0 && (
+            <div>
+              <CueLabel>Questions</CueLabel>
+              <ul className="space-y-1.5">
+                {cues.questions.map((q, i) => (
+                  <li key={i} className="flex items-start gap-1.5 text-xs font-semibold text-rose-900/90 leading-snug">
+                    <HelpCircle size={12} className="shrink-0 mt-0.5 text-rose-400" />{txt(q)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {cues.diagram && (
+            <div>
+              <CueLabel>Diagram</CueLabel>
+              <p className="flex items-start gap-1.5 text-xs text-rose-900/90 leading-snug">
+                <PenTool size={12} className="shrink-0 mt-0.5 text-rose-400" />{txt(cues.diagram)}
+              </p>
+            </div>
+          )}
+        </aside>
+
+        {/* ── Notes column ── */}
+        <div className="p-4 space-y-4 min-w-0">
+          <p className="text-base font-black text-on-surface leading-none">Notes</p>
+          {slide.notes_points && slide.notes_points.length > 0 && (
+            <ul className="space-y-1.5">
+              {slide.notes_points.filter(Boolean).map((pt, i) => (
+                <li key={i} className="flex items-start gap-2 text-sm text-on-surface leading-relaxed">
+                  <span className="shrink-0 text-teal-500 font-black mt-px">•</span>
+                  <span>{txt(pt)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <DenseSlide slide={slide} math={math} />
+        </div>
+      </div>
+
+      {/* ── Summary strip ── */}
+      {slide.summary && (
+        <div className="bg-blue-100/70 border-t-2 border-blue-200 px-4 py-3">
+          <p className="text-[10px] font-black uppercase tracking-widest text-blue-700 mb-1">Summary</p>
+          <p className="text-sm text-blue-950 font-medium leading-relaxed">{txt(slide.summary)}</p>
         </div>
       )}
+    </div>
+  );
+};
 
+/** Chapter-level Cornell summary — top-level main ideas for quick reference. */
+const ChapterSummary: React.FC<{ summary?: string; keyPoints?: string[] }> = ({ summary, keyPoints }) => {
+  if (!summary && !keyPoints?.length) return null;
+  return (
+    <div className="p-4 bg-blue-100/70 rounded-xl border-2 border-blue-200">
+      <p className="text-base font-black text-blue-950 mb-1.5">Chapter Summary</p>
+      {summary && <p className="text-sm text-blue-950 leading-relaxed">{summary}</p>}
+      {keyPoints && keyPoints.length > 0 && (
+        <ul className="mt-3 pt-3 border-t border-blue-200 space-y-1">
+          {keyPoints.slice(0, 8).map((pt, i) => (
+            <li key={i} className="flex items-start gap-2 text-xs text-blue-950 leading-relaxed">
+              <span className="shrink-0 w-4 h-4 rounded-full bg-blue-200 text-blue-800 flex items-center justify-center text-[9px] font-black mt-0.5">{i + 1}</span>
+              {pt}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+const DenseSlideshow: React.FC<{ slides: SmartSlide[]; summary?: string; keyPoints?: string[]; math?: boolean }> = ({ slides, summary, keyPoints, math }) => {
+  const [current, setCurrent] = React.useState(0);
+  const slide = slides[current];
+  if (!slide) return null;
+  const isLast = current === slides.length - 1;
+
+  return (
+    <div className="space-y-4">
       <AnimatePresence mode="wait">
         <motion.div
           key={current}
@@ -345,15 +520,11 @@ const DenseSlideshow: React.FC<{ slides: SmartSlide[]; summary?: string; keyPoin
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: -30 }}
           transition={{ duration: 0.2 }}
-          className="p-5 rounded-xl border-2 border-teal-400 bg-white"
+          className="space-y-4"
         >
-          <div className="flex items-center gap-2 mb-4">
-            <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase text-teal-700 bg-teal-50">
-              {current + 1} / {slides.length}
-            </span>
-            <h4 className="text-sm font-black text-teal-700">{slide.title || `Slide ${current + 1}`}</h4>
-          </div>
-          <DenseSlide slide={slide} />
+          <CornellPage slide={slide} index={current} total={slides.length} math={math} />
+          {/* Cornell: the chapter summary comes at the end */}
+          {isLast && <ChapterSummary summary={summary} keyPoints={keyPoints} />}
         </motion.div>
       </AnimatePresence>
 
@@ -377,7 +548,7 @@ const DenseSlideshow: React.FC<{ slides: SmartSlide[]; summary?: string; keyPoin
         </div>
         <button
           onClick={() => setCurrent(c => c + 1)}
-          disabled={current === slides.length - 1}
+          disabled={isLast}
           className="px-3 py-1.5 rounded-lg bg-surface-container text-on-surface text-xs font-bold disabled:opacity-30 hover:bg-surface-container-high transition-all"
         >
           Next →
@@ -387,28 +558,13 @@ const DenseSlideshow: React.FC<{ slides: SmartSlide[]; summary?: string; keyPoin
   );
 };
 
-const DenseFullView: React.FC<{ slides: SmartSlide[]; notes: GeneratedNotes }> = ({ slides, notes }) => (
-  <div className="space-y-3">
-    {/* Key Points accordion */}
-    {notes.keyPoints?.length > 0 && (
-      <AccordionItem title="Key Points" accentBg={TH.bg} accentText={TH.text} accentBorder={TH.border} defaultOpen>
-        <ul className="space-y-1.5">
-          {notes.keyPoints.map((pt, i) => (
-            <li key={i} className="flex items-start gap-2 text-sm text-on-surface leading-relaxed">
-              <span className="shrink-0 w-5 h-5 rounded-full bg-teal-100 text-teal-700 flex items-center justify-center text-[10px] font-black mt-0.5">{i + 1}</span>
-              {pt}
-            </li>
-          ))}
-        </ul>
-      </AccordionItem>
-    )}
-
-    {/* Each slide as an accordion */}
+const DenseFullView: React.FC<{ slides: SmartSlide[]; notes: GeneratedNotes; math?: boolean }> = ({ slides, notes, math }) => (
+  <div className="space-y-4">
     {slides.filter(Boolean).map((slide, i) => (
-      <AccordionItem key={i} title={slide?.title || `Slide ${i + 1}`} badge={`${i + 1}`} accentBg={TH.bg} accentText={TH.text} accentBorder={TH.border}>
-        <DenseSlide slide={slide} />
-      </AccordionItem>
+      <CornellPage key={i} slide={slide} index={i} total={slides.length} math={math} />
     ))}
+
+    <ChapterSummary summary={notes.summary} keyPoints={notes.keyPoints} />
 
     {/* Definitions accordion */}
     {notes.definitions?.length > 0 && (
@@ -959,56 +1115,108 @@ interface StudyNotesPanelProps {
 export const StudyNotesPanel: React.FC<StudyNotesPanelProps> = ({
   kit, planType, initialStyle, onOpenFlashcards, onGoToQuiz, onSave, onPaywall,
 }) => {
-  const [activeStyle, setActiveStyle] = useState<NoteStyle>(initialStyle || 'smart');
+  // Only Smart (Cornell method) exists now — any requested style opens Smart.
+  const startStyle: NoteStyle | undefined = initialStyle ? 'smart' : undefined;
+  const [activeStyle, setActiveStyle] = useState<NoteStyle>('smart');
   const [notes, setNotes] = useState<Record<string, GeneratedNotes | null>>({
     smart: null, cornell: null, 'concept-map': null,
   });
   const [loading, setLoading] = useState(false);
+  const [loadingSince, setLoadingSince] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'slideshow' | 'full'>('slideshow');
+  const mountedRef = React.useRef(true);
+  // Set true on (re)mount too: StrictMode runs mount → cleanup → mount in dev, and
+  // without this the flag stayed false so finished notes were never shown.
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const topic = kit?.chapterTitle || kit?.title || kit?.quiz?.title || 'Topic';
   const subject = kit?.subject || 'General';
 
-  const generate = useCallback(async (style: NoteStyle) => {
-    setLoading(true);
-    setError(null);
-    const params = {
-      chapterTitle: topic,
-      subject,
-      noteStyle: style,
-      classLevel: kit?.classLevel || 'Class 10',
-      examMode: kit?.examMode || kit?.board || 'CBSE',
-      board: kit?.board,
-      language: kit?.language,
-      sourceContent: kit?.sourceContent,
-    };
-    // Auto-retry once on parse/network errors before showing error
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const data = await aiService.generateStudyNotes(params);
-        setNotes(prev => ({ ...prev, [style]: data }));
-        setLoading(false);
+  // Elapsed-time ticker for the loading state
+  React.useEffect(() => {
+    if (!loading || !loadingSince) return;
+    setElapsed(Math.floor((Date.now() - loadingSince) / 1000));
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - loadingSince) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [loading, loadingSince]);
+
+  const generate = useCallback(async (style: NoteStyle, opts?: { force?: boolean }) => {
+    const key = notesCacheKey(kit, topic, style);
+    if (!opts?.force) {
+      const cached = readCachedNotes(key);
+      if (cached) {
+        setNotes(prev => ({ ...prev, [style]: cached }));
+        setError(null);
         return;
-      } catch (e: any) {
-        const msg = (e?.message || '').toLowerCase();
-        const isRetryable = msg.includes('incomplete') || msg.includes('corrupted') || msg.includes('parse') || msg.includes('network') || msg.includes('busy');
-        if (attempt === 0 && isRetryable) {
-          console.warn(`[StudyNotes] Auto-retrying after: ${e?.message}`);
-          continue;
-        }
-        setError(e?.message || 'Generation failed. Please try again.');
       }
     }
-    setLoading(false);
+
+    setLoading(true);
+    setLoadingSince(Date.now());
+    setError(null);
+
+    let request = opts?.force ? undefined : inFlightNotes.get(key);
+    if (!request) {
+      const params = {
+        chapterTitle: topic,
+        subject,
+        noteStyle: style,
+        classLevel: kit?.classLevel || 'Class 10',
+        examMode: kit?.examMode || kit?.board || 'CBSE',
+        board: kit?.board,
+        language: kit?.language,
+        sourceContent: kit?.sourceContent,
+        fresh: opts?.force || undefined,
+      };
+      const run = async (): Promise<GeneratedNotes> => {
+        // Auto-retry once on parse/network errors. Never on timeouts — a retry
+        // would just make the student wait the full generation time again.
+        for (let attempt = 0; ; attempt++) {
+          try {
+            return await aiService.generateStudyNotes(params);
+          } catch (e: any) {
+            const msg = (e?.message || '').toLowerCase();
+            const isTimeout = msg.includes('too long') || msg.includes('timed out');
+            const isRetryable = !isTimeout && (msg.includes('incomplete') || msg.includes('corrupted') || msg.includes('parse') || msg.includes('network') || msg.includes('busy'));
+            if (attempt === 0 && isRetryable) {
+              console.warn(`[StudyNotes] Auto-retrying after: ${e?.message}`);
+              continue;
+            }
+            throw e;
+          }
+        }
+      };
+      request = run()
+        // Partial notes (a part failed) are shown but never saved — reopening retries
+        .then(data => { if (!data?.incompleteTopics?.length) writeCachedNotes(key, data); return data; })
+        .finally(() => inFlightNotes.delete(key));
+      inFlightNotes.set(key, request);
+    }
+
+    try {
+      const data = await request;
+      if (mountedRef.current) setNotes(prev => ({ ...prev, [style]: data }));
+    } catch (e: any) {
+      if (mountedRef.current) setError(e?.message || 'Generation failed. Please try again.');
+    } finally {
+      if (mountedRef.current) setLoading(false);
+    }
   }, [topic, subject, kit]);
 
+  // On mount: honour initialStyle, otherwise show cached notes / re-attach to a
+  // generation that was still running when the student switched tabs.
   React.useEffect(() => {
-    if (initialStyle) {
-      const meta = STYLES.find(s => s.id === initialStyle);
-      if (meta && planAllows(planType, meta.minPlan)) {
-        generate(initialStyle);
-      }
+    const style = startStyle || activeStyle;
+    const meta = STYLES.find(s => s.id === style);
+    if (!meta || !planAllows(planType, meta.minPlan)) return;
+    const key = notesCacheKey(kit, topic, style);
+    if (startStyle || readCachedNotes(key) || inFlightNotes.has(key)) {
+      generate(style);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1053,6 +1261,14 @@ export const StudyNotesPanel: React.FC<StudyNotesPanelProps> = ({
 
   const currentNotes = notes[activeStyle];
   const activeMeta = STYLES.find(s => s.id === activeStyle)!;
+  const isMathChapter = isMathSubject(subject);
+  // v1 (no slides) and v2 (slides without Cornell cues) can be upgraded to the Cornell format
+  const isOldFormat = !!currentNotes && (
+    !currentNotes.slides?.length
+    || !currentNotes.slides.some(sl => sl?.cue_points?.length || sl?.cue_questions?.length)
+    // science/maths notes made before derivations were added (v4)
+    || (isMathChapter && (currentNotes.noteVersion ?? 0) < 4)
+  );
 
   return (
     <div className="bg-white border border-surface-container-high rounded-2xl overflow-hidden card-shadow">
@@ -1064,46 +1280,15 @@ export const StudyNotesPanel: React.FC<StudyNotesPanelProps> = ({
           </div>
           <div>
             <h3 className="text-lg font-black text-on-surface">Study Workspace</h3>
-            <p className="text-xs text-on-surface-variant font-medium mt-0.5">Choose a note style and revise this chapter your way.</p>
+            <p className="text-xs text-on-surface-variant font-medium mt-0.5">Smart Notes in the Cornell method — for every subject.</p>
           </div>
         </div>
 
-        {/* Style selector with subject recommendation */}
-        <div className="flex flex-wrap gap-2">
-          {STYLES.map(meta => {
-            const allowed = planAllows(planType, meta.minPlan);
-            const Icon = meta.icon;
-            const isActive = activeStyle === meta.id;
-            const isRecommended = meta.id === getRecommendedStyle(subject);
-            return (
-              <button
-                key={meta.id}
-                onClick={() => handleStyleSelect(meta.id)}
-                title={allowed ? meta.desc : `Requires ${meta.minPlan} plan`}
-                className={`relative flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black uppercase tracking-wider border-2 transition-all
-                  ${isActive
-                    ? `${meta.bg} ${meta.border} ${meta.color} shadow-sm`
-                    : 'bg-white border-surface-container-high text-on-surface-variant hover:border-surface-container'}
-                  ${!allowed ? 'opacity-60' : ''}
-                  ${isRecommended && !isActive ? 'ring-2 ring-amber-300/50' : ''}
-                `}
-              >
-                {!allowed && <Lock size={11} className="shrink-0" />}
-                <Icon size={13} className="shrink-0" />
-                {meta.shortLabel}
-                {meta.minPlan !== 'free' && (
-                  <span className={`ml-0.5 px-1 py-0.5 rounded text-[9px] font-black uppercase ${meta.minPlan === 'pro' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
-                    {meta.minPlan}
-                  </span>
-                )}
-                {isRecommended && (
-                  <span className="absolute -top-1.5 -right-1.5 px-1 py-0.5 bg-amber-400 text-amber-900 rounded text-[7px] font-black leading-none">
-                    REC
-                  </span>
-                )}
-              </button>
-            );
-          })}
+        {/* Cornell method legend: cues · notes · summary */}
+        <div className="flex flex-wrap items-center gap-2 text-[10px] font-black uppercase tracking-wider">
+          <span className="px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-200 text-rose-800">Cues · questions to self-test</span>
+          <span className="px-2.5 py-1 rounded-lg bg-white border border-surface-container-high text-on-surface">Notes · concise, shorthand</span>
+          <span className="px-2.5 py-1 rounded-lg bg-blue-50 border border-blue-200 text-blue-800">Summary · quick review</span>
         </div>
       </div>
 
@@ -1118,7 +1303,7 @@ export const StudyNotesPanel: React.FC<StudyNotesPanelProps> = ({
             <h4 className="text-base font-black text-on-surface mb-1.5">{activeMeta.label}</h4>
             <p className="text-sm text-on-surface-variant max-w-xs mx-auto mb-5">{activeMeta.desc}</p>
             <button
-              onClick={() => generate(activeStyle)}
+              onClick={() => handleStyleSelect(activeStyle)}
               className="inline-flex items-center gap-2 px-5 py-2.5 bg-teal-600 text-white rounded-xl font-black text-xs uppercase tracking-widest hover:bg-teal-700 transition-all shadow-md hover:-translate-y-0.5"
             >
               <Zap size={15} />Generate {activeMeta.shortLabel} Notes
@@ -1132,6 +1317,12 @@ export const StudyNotesPanel: React.FC<StudyNotesPanelProps> = ({
             <Loader2 size={32} className="text-teal-500 animate-spin mx-auto mb-3" />
             <p className="text-sm font-bold text-on-surface">Generating {activeMeta.label}…</p>
             <p className="text-xs text-on-surface-variant mt-1">Tailoring for {subject} — {kit?.board || 'CBSE'} {kit?.classLevel || ''}</p>
+            <p className="text-xs font-bold text-teal-700 mt-3 tabular-nums">{elapsed}s</p>
+            <p className="text-[11px] text-on-surface-variant mt-1 max-w-xs mx-auto">
+              {elapsed < 90
+                ? 'Writing every NCERT topic of this chapter in parallel — this usually takes 30–60 seconds. You can switch tabs; it keeps generating.'
+                : 'Taking a little longer than usual — larger chapters can need up to 3 minutes.'}
+            </p>
           </div>
         )}
 
@@ -1153,18 +1344,35 @@ export const StudyNotesPanel: React.FC<StudyNotesPanelProps> = ({
         {/* Notes content */}
         {!loading && !error && currentNotes && (
           <>
-            {/* v1 → v2 upgrade banner: shown for SMART notes without dense slides */}
-            {activeStyle === 'smart' && (!currentNotes.slides || currentNotes.slides.length === 0) && (
+            {/* Partial notes: some NCERT topics failed to generate */}
+            {currentNotes.incompleteTopics && currentNotes.incompleteTopics.length > 0 && (
+              <div className="flex items-center gap-3 px-4 py-3 mb-4 rounded-xl bg-rose-50 border border-rose-200">
+                <AlertTriangle size={16} className="text-rose-600 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold text-rose-800">{currentNotes.incompleteTopics.length} topic{currentNotes.incompleteTopics.length > 1 ? 's' : ''} couldn't be generated — the AI was busy</p>
+                  <p className="text-[11px] text-rose-700 mt-0.5 truncate">Missing: {currentNotes.incompleteTopics.join(', ')}</p>
+                </div>
+                <button
+                  onClick={() => generate(activeStyle, { force: true })}
+                  className="shrink-0 px-3 py-1.5 bg-rose-600 text-white rounded-lg text-[11px] font-black uppercase tracking-wider hover:bg-rose-700 transition-all"
+                >
+                  Regenerate
+                </button>
+              </div>
+            )}
+
+            {/* Upgrade banner: notes saved before the Cornell format (v1 / v2) */}
+            {activeStyle === 'smart' && isOldFormat && (
               <div className="flex items-center gap-3 px-4 py-3 mb-4 rounded-xl bg-amber-50 border border-amber-200">
                 <RefreshCw size={16} className="text-amber-600 shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-bold text-amber-800">Updated format available</p>
                   <p className="text-[11px] text-amber-700 mt-0.5">
-                    Dense exam-ready slides with tables, formulas, and comparison panels.
+                    Cornell notes with step-by-step NCERT derivations, cue questions and a summary on every page.
                   </p>
                 </div>
                 <button
-                  onClick={() => generate(activeStyle)}
+                  onClick={() => generate(activeStyle, { force: true })}
                   className="shrink-0 px-3 py-1.5 bg-amber-600 text-white rounded-lg text-[11px] font-black uppercase tracking-wider hover:bg-amber-700 transition-all"
                 >
                   Upgrade
@@ -1203,8 +1411,8 @@ export const StudyNotesPanel: React.FC<StudyNotesPanelProps> = ({
                 {/* Dense slides (v2) for SMART when available */}
                 {activeStyle === 'smart' && currentNotes.slides?.length > 0 ? (
                   viewMode === 'slideshow'
-                    ? <DenseSlideshow slides={currentNotes.slides.filter(Boolean)} summary={currentNotes.summary} keyPoints={currentNotes.keyPoints} />
-                    : <DenseFullView slides={currentNotes.slides.filter(Boolean)} notes={currentNotes} />
+                    ? <DenseSlideshow slides={currentNotes.slides.filter(Boolean)} summary={currentNotes.summary} keyPoints={currentNotes.keyPoints} math={isMathChapter} />
+                    : <DenseFullView slides={currentNotes.slides.filter(Boolean)} notes={currentNotes} math={isMathChapter} />
                 ) : viewMode === 'slideshow' ? (
                   <NoteSlideshow
                     slides={buildSlides(currentNotes)}
@@ -1251,7 +1459,7 @@ export const StudyNotesPanel: React.FC<StudyNotesPanelProps> = ({
             <Download size={13} />PDF
           </button>
           <button
-            onClick={() => { setNotes(prev => ({ ...prev, [activeStyle]: null })); generate(activeStyle); }}
+            onClick={() => { setNotes(prev => ({ ...prev, [activeStyle]: null })); generate(activeStyle, { force: true }); }}
             className="ml-auto flex items-center gap-1.5 text-xs text-on-surface-variant hover:text-on-surface font-bold">
             <RotateCcw size={12} />Regenerate
           </button>

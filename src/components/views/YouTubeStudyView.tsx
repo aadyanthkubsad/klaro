@@ -174,7 +174,7 @@ export const YouTubeStudyView = ({
         benefits: [
           'YouTube video → full recall kit',
           'Summary, flashcards, and quiz generated',
-          'Cornell, Outline, Atomic note styles',
+          'Cornell-method Smart Notes for the video',
           'Spaced revision tasks auto-created',
           'Weak-topic tags for focused study',
         ],
@@ -744,7 +744,7 @@ export const YouTubeStudyView = ({
           <li className="flex gap-2"><span className="text-primary font-black">1.</span> Quick summary + key points from the video</li>
           <li className="flex gap-2"><span className="text-primary font-black">2.</span> 8+ flashcards for active recall</li>
           <li className="flex gap-2"><span className="text-primary font-black">3.</span> 5 MCQs to test what you actually remember</li>
-          <li className="flex gap-2"><span className="text-primary font-black">4.</span> Cornell, Outline, Atomic and more note styles</li>
+          <li className="flex gap-2"><span className="text-primary font-black">4.</span> Cornell-method Smart Notes (cues, notes, summary)</li>
           <li className="flex gap-2"><span className="text-primary font-black">5.</span> Spaced revision task created automatically</li>
         </ul>
       </div>

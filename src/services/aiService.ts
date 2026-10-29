@@ -286,23 +286,39 @@ export const aiService = {
     board?: string;
     language?: 'hi' | 'en';
     sourceContent?: string;
+    /** Skip the server cache (Regenerate / Upgrade). */
+    fresh?: boolean;
   }): Promise<any> {
-    const response = await fetch('/api/generate-study-notes', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify(params),
-    });
-    if (!response.ok) {
-      let msg = 'Notes generation failed.';
-      try {
-        const err = await response.json();
-        msg = err?.error || msg;
-      } catch { /* body wasn't JSON — use default */ }
-      throw new Error(msg);
+    // Abort after 200s — just past the server's 180s queue timeout, so we normally
+    // surface the server's classified error but never leave a spinner hanging.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 200_000);
+    try {
+      const response = await fetch('/api/generate-study-notes', {
+        method: 'POST',
+        headers: authHeaders(),
+        signal: controller.signal,
+        body: JSON.stringify(params),
+      });
+      if (!response.ok) {
+        let msg = 'Notes generation failed.';
+        try {
+          const err = await response.json();
+          msg = err?.error || msg;
+        } catch { /* body wasn't JSON — use default */ }
+        throw new Error(msg);
+      }
+      const result = await response.json();
+      if (!result.success) throw new Error(result.error || 'Notes generation failed. Please try again.');
+      return result.data;
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        throw new Error('Notes generation took too long. Please try again in a minute.');
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
     }
-    const result = await response.json();
-    if (!result.success) throw new Error(result.error || 'Notes generation failed. Please try again.');
-    return result.data;
   },
 
   async generatePracticeFromPattern(params: {

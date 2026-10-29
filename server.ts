@@ -88,7 +88,7 @@ async function startServer() {
   }
 
   configureQueue({
-    maxConcurrent: parseInt(process.env.AI_MAX_CONCURRENT || '5', 10),
+    maxConcurrent: parseInt(process.env.AI_MAX_CONCURRENT || '15', 10), // one SMART notes request runs 5 calls in parallel
     maxQueueLength: parseInt(process.env.AI_MAX_QUEUE || '50', 10),
     requestTimeoutMs: parseInt(process.env.AI_TIMEOUT_MS || '180000', 10),
   });
@@ -605,6 +605,10 @@ async function startServer() {
 
   const classifyAIError = (error: any): { code: string; message: string; status: number } => {
     const msg = (error?.message || String(error)).toLowerCase();
+    if (msg.includes('daily ai quota exhausted')) {
+      const hours = Math.max(1, Math.round(parseInt(msg.match(/resets in (\d+)s/)?.[1] || '3600', 10) / 3600));
+      return { code: 'DAILY_QUOTA', status: 429, message: `Lumina's AI has reached its daily limit. Please try again in about ${hours} hour${hours > 1 ? 's' : ''}.` };
+    }
     if (msg.includes('quota') || msg.includes('rate') || msg.includes('429') || msg.includes('resource_exhausted') || msg.includes('free_tier_requests')) {
       return { code: 'QUOTA_EXCEEDED', status: 429, message: 'AI quota exceeded — the free-tier limit has been reached. Please wait a few minutes and try again, or use Type/Paste Text instead.' };
     }
@@ -629,10 +633,14 @@ async function startServer() {
     return { code: 'UNKNOWN', status: 500, message: error?.message || 'Something went wrong while generating content. Please try again.' };
   };
 
+  // Models whose DAILY quota is used up (free tier: 20 requests/day/model).
+  // Until the reset time we skip them instead of paying a 429 + retry wait per call.
+  const modelBlockedUntil = new Map<string, number>();
+
   /**
    * AI Service Endpoints
    */
-  const callGemini = async (contents: any[], respFormat = "application/json") => {
+  const callGemini = async (contents: any[], respFormat = "application/json", opts: { quality?: boolean } = {}) => {
     let rawKey = process.env.GEMINI_API_KEY || "";
     const apiKey = rawKey.replace(/^["']|["']$/g, '').trim();
 
@@ -645,16 +653,37 @@ async function startServer() {
 
     const contentsObj = typeof contents[0] === 'string' ? [{ role: "user", parts: contents.map(c => ({ text: c })) }] : contents;
 
-    // Lite models first for speed (2-3x faster); full flash models as fallback for prompts they can't handle.
-    const models = ["gemini-2.5-flash-lite", "gemini-2.0-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"];
+    // Default (kits, quizzes, chat…): lite model first for speed, full flash as fallback.
+    // `quality` (Smart Notes / derivations): full flash first — lite drops derivation
+    // steps and NCERT coverage on long chapter JSON. gemini-2.0-flash* are retired (404).
+    const models = opts.quality
+      ? ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+      : ["gemini-2.5-flash-lite", "gemini-2.5-flash"];
     let response;
     let lastError: any;
 
-    // Per-attempt timeout prevents one slow model from eating the entire queue budget.
-    const PER_ATTEMPT_TIMEOUT_MS = 45_000; // 45 seconds per attempt
+    // Per-attempt timeouts. A full-chapter JSON (notes / kit) routinely takes 60-100s on
+    // 2.5-flash, so the primary model gets most of the queue budget (AI_TIMEOUT_MS, 180s).
+    // A timed-out attempt is NOT retried on the same model — it would just time out again —
+    // we fall straight through to the faster lite model with the remaining budget.
+    const ATTEMPT_TIMEOUT_MS: Record<string, number> = {
+      "gemini-2.5-flash": parseInt(process.env.AI_PRIMARY_TIMEOUT_MS || '120000', 10),
+      "gemini-2.5-flash-lite": parseInt(process.env.AI_FALLBACK_TIMEOUT_MS || '50000', 10),
+    };
+    // Optional cap on 2.5-flash "thinking" tokens (unset = model default).
+    const thinkingBudget = process.env.GEMINI_THINKING_BUDGET;
 
-    for (const model of models) {
+    const available = models.filter(m => (modelBlockedUntil.get(m) || 0) <= Date.now());
+    if (available.length === 0) {
+      const resetMs = Math.min(...models.map(m => modelBlockedUntil.get(m) || 0)) - Date.now();
+      throw new Error(`Daily AI quota exhausted — resets in ${Math.ceil(resetMs / 1000)}s`);
+    }
+
+    for (const model of available) {
       for (let attempt = 0; attempt < 2; attempt++) {
+        const timeoutMs = ATTEMPT_TIMEOUT_MS[model] ?? 50_000;
+        const abort = new AbortController();
+        let timer: ReturnType<typeof setTimeout> | undefined;
         try {
           const attemptPromise = ai.models.generateContent({
             model,
@@ -662,7 +691,11 @@ async function startServer() {
             config: {
               temperature: 0.4,
               responseMimeType: respFormat,
-              maxOutputTokens: 16384,
+              // Small cap keeps default calls fast; quality calls need room for
+              // 2.5-flash thinking tokens plus a full chapter of Cornell pages.
+              maxOutputTokens: opts.quality ? 65536 : 16384,
+              abortSignal: abort.signal,
+              ...(thinkingBudget !== undefined && thinkingBudget !== '' ? { thinkingConfig: { thinkingBudget: parseInt(thinkingBudget, 10) } } : {}),
               safetySettings: [
                 { category: "HARM_CATEGORY_HARASSMENT" as any, threshold: "BLOCK_ONLY_HIGH" as any },
                 { category: "HARM_CATEGORY_HATE_SPEECH" as any, threshold: "BLOCK_ONLY_HIGH" as any },
@@ -672,12 +705,15 @@ async function startServer() {
             }
           });
 
-          // Race against per-attempt timeout
+          // Race against per-attempt timeout; abort the underlying request when it fires
           response = await Promise.race([
             attemptPromise,
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error(`Model ${model} timed out after ${PER_ATTEMPT_TIMEOUT_MS / 1000}s`)), PER_ATTEMPT_TIMEOUT_MS)
-            ),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => {
+                abort.abort();
+                reject(new Error(`Model ${model} timed out after ${timeoutMs / 1000}s`));
+              }, timeoutMs);
+            }),
           ]);
           break;
         } catch (e: any) {
@@ -686,21 +722,32 @@ async function startServer() {
           const isTimeout = msg.includes('timed out') || msg.includes('timeout');
           const isTransient = msg.includes('503') || msg.includes('unavailable') || msg.includes('high demand') || msg.includes('overloaded');
           const isQuota = msg.includes('429') || msg.includes('quota') || msg.includes('resource_exhausted') || msg.includes('rate_limit');
-          const isDailyQuota = isQuota && msg.includes('limit: 0');
+          const isDailyQuota = isQuota && (msg.includes('perday') || msg.includes('limit: 0'));
+          if (isDailyQuota) {
+            const retrySec = parseInt((e.message || '').match(/"retryDelay":\s*"(\d+)s"/)?.[1] || '3600', 10);
+            modelBlockedUntil.set(model, Date.now() + Math.min(retrySec, 86_400) * 1000);
+            logger.warn(`Gemini ${model} daily quota exhausted — skipping it for ${Math.round(retrySec / 60)} min`);
+          }
           const isNotFound = msg.includes('404') || msg.includes('not found') || msg.includes('not_found');
           const canFallback = isTransient || isQuota || isNotFound || isTimeout;
-          if ((isTransient || isTimeout || (isQuota && !isDailyQuota)) && attempt === 0) {
+          if ((isTransient || (isQuota && !isDailyQuota)) && attempt === 0) {
             const waitSec = isQuota ? 5 : 2;
-            logger.warn(`Gemini ${model} ${isTimeout ? 'timed out' : isQuota ? '429' : '503'}, retrying in ${waitSec}s`);
+            logger.warn(`Gemini ${model} ${isQuota ? '429' : '503'}, retrying in ${waitSec}s`, { meta: { detail: String(e.message || '').slice(0, 400) } });
             await new Promise(r => setTimeout(r, waitSec * 1000));
             continue;
           }
-          if (canFallback && models.indexOf(model) < models.length - 1) {
+          if (canFallback && available.indexOf(model) < available.length - 1) {
             logger.warn(`Gemini ${model} unavailable (${isTimeout ? 'timeout' : isDailyQuota ? 'daily quota' : isQuota ? 'rate limit' : isNotFound ? 'not found' : '503'}), falling back`);
             break;
           }
           logger.error('Gemini error', { meta: { error: e.message || String(e) } });
+          if (isDailyQuota) {
+            const resetMs = Math.min(...models.map(m => modelBlockedUntil.get(m) || Date.now() + 3_600_000)) - Date.now();
+            throw new Error(`Daily AI quota exhausted — resets in ${Math.ceil(resetMs / 1000)}s`);
+          }
           throw new Error(handleSDKError(e));
+        } finally {
+          if (timer) clearTimeout(timer);
         }
       }
       if (response) break;
@@ -1415,7 +1462,7 @@ ${hindiFinalOverride}`;
       const valErrors = validateStudyNotes(req.body);
       if (sendValidationErrors(res, valErrors)) return;
 
-      const { chapterTitle, subject, noteStyle, classLevel, examMode, board, language, sourceContent } = req.body;
+      const { chapterTitle, subject, noteStyle, classLevel, examMode, board, language, sourceContent, fresh } = req.body;
 
       const rawKey = process.env.GEMINI_API_KEY || "";
       const apiKey = rawKey.replace(/^["']|["']$/g, '').trim();
@@ -1429,10 +1476,13 @@ ${hindiFinalOverride}`;
         chapterTitle,
         subject,
         classLevel,
-        noteStyle: noteStyle,
+        // SMART notes use the Cornell layout (cues / notes / summary) since v3, with derivations since v4 —
+        // versioned so older cached slide decks are never served for it.
+        noteStyle: noteStyle === 'smart' ? 'smart-cornell-v4' : noteStyle,
         language: language || 'en',
       });
-      const cached = cacheGet(cacheKey);
+      // `fresh` = student pressed Regenerate/Upgrade → skip the cache read.
+      const cached = fresh ? undefined : cacheGet(cacheKey);
       if (cached) {
         logger.info('Cache hit for study-notes', { requestId: req.requestId, cacheHit: true });
         return res.json({ success: true, data: cached });
@@ -1455,26 +1505,42 @@ ${hindiFinalOverride}`;
 
       // ── Style-specific instructions (topper's notebook format) ─────────────────
       const styleInstructions: Record<string, string> = {
-        smart: `Generate SMART NOTES — dense, structured revision slides. Each slide covers 1-2 closely related NCERT sub-topics.
+        smart: `Generate SMART NOTES in the CORNELL NOTE-TAKING METHOD — use this method for EVERY subject (Science, Maths, Social Science, Commerce, English, Hindi).
+Each slide is one Cornell "page" covering 1-2 closely related NCERT sub-topics, with three zones:
+
+  ① CUES (narrow left column — used during review):
+     "cue_points": 2-4 main ideas as short labels (2-5 words each), e.g. "Centre of mass", "Torque = r × F"
+     "cue_questions": 2-4 self-test questions that connect the points, in board-exam phrasing ("State…", "Distinguish…", "Why does…?", "Derive…")
+     "diagram_cue": one line naming the diagram / flowchart / map / timeline to draw for this page, or "" if none fits
+  ② NOTES (wide right column — what you record in class):
+     "notes_points": 5-10 CONCISE lines — short sentences, shorthand symbols (→ ∴ ∵ ≈ ↑ ↓ ⇒ ≠ ∝) and standard abbreviations (e.g., i.e., w.r.t., eqn, approx., govt., max/min). Lists, NOT paragraphs. One fact per line.
+     plus these OPTIONAL rich blocks — include only what fits the topic:
+       "definitions": [{ "term": "...", "definition": "...", "example": "e.g., ..." }]
+       "tables": [{ "label": "UPPERCASE LABEL", "columns": [...], "rows": [[...]] }] — for ANY comparison of ≥2 things, timelines (Date | Event | Significance), cause → effect. Show ALL rows.
+       "comparison_panels": [{ "left": { "title": "...", "content": "..." }, "right": { "title": "...", "content": "..." } }]
+       "compact_grid": [{ "primary": "symbol/label", "secondary": "description" }] — SI units, postulates, dates, characters, lists of items
+       "formulae": [{ "label": "Name", "formula": "expression with subscripts ₀₁₂₃ and superscripts ⁰¹²³⁻⁺" }]
+       "step_method": { "label": "HOW TO...", "steps": ["Step 1...", "Step 2..."] }
+       "solved_example": { "mark_pattern": "3-mark numerical", "question": "...", "steps": ["..."], "answer": "final answer" }
+       "derivations": [{ "title": "Derivation of …", "marks": "3-mark", "given": "assumptions / starting law, e.g. Consider a particle of mass m at position r with momentum p", "steps": ["Step 1 with the equation", "Step 2 …"], "result": "final boxed result, e.g. τ = dL/dt" }]
+         — MANDATORY for Science/Physics/Chemistry/Maths: EVERY formula/relation that the NCERT textbook DERIVES or PROVES on this page's topics gets a complete step-by-step derivation (4-10 numbered steps, one equation or reasoning move per step, nothing skipped). Leave [] for subjects/topics with no derivations.
+       "common_mistake": "One specific error students make + correct approach"
+       "exam_tip": "Cite specific marks + years. Never vague 'this is important'."
+  ③ SUMMARY (bottom strip — quick reference):
+     "summary": 1-2 sentences with the top-level main idea(s) of THIS page.
+
+Every slide also has "title" (the NCERT sub-topic name).
 
 ABSOLUTE RULES — violating these is a generation failure:
 1. NO OVERVIEW / INTRODUCTION. First slide = first actual NCERT topic (e.g. "Matter and Its Classification", "Physical Quantities and Units"). Never "Overview", "Introduction", "Sub-topics".
 2. SUBJECT-TOPIC GUARDRAIL: Only content from THIS chapter's NCERT textbook. No cross-chapter/cross-subject contamination.
-3. DENSITY: Each slide must have 7-12 distinct info units (definitions + table rows + formulae + example steps all count). A slide with just 3-4 bullets is a failure.
+3. EVERY slide MUST have cue_points, cue_questions, notes_points and summary. Each slide must carry 7-12 distinct info units across notes_points + rich blocks.
 4. NO RAW MARKDOWN: No **, ##, *, etc. in output — the frontend renders structured data.
+5. DERIVATIONS ARE NON-NEGOTIABLE (Science/Maths): FIRST fill the top-level "derivation_checklist" with every derivation / proof in this chapter of the CURRENT rationalised NCERT textbook — go section by section and include every expression the text works out (variation of a quantity with height/depth/temperature, energy and work expressions, theorem proofs, special cases such as "field inside/outside") (including theorems, laws "obtained from", and relations "shown to be"); each one MUST appear in "derivations" on the slide covering that topic. Derivations are the highest-scoring 3- and 5-mark CBSE questions — a chapter with NCERT derivations but an empty "derivations" array is a generation failure. Add a cue_question like "Derive …" for each.
+6. A law/principle stated in words (e.g. "Conservation of angular momentum") goes in "definitions" (term + statement), NOT in comparison_panels.
 
-Fill the "slides" array (${slideRange} slides covering the ENTIRE chapter — use MORE slides for chapters with many topics). Each slide is a JSON object with these OPTIONAL sections (include only what's relevant to the topic):
-  "definitions": [{ "term": "...", "definition": "...", "example": "e.g., ..." }]
-  "tables": [{ "label": "UPPERCASE LABEL", "columns": [...], "rows": [[...]] }] — use for ANY comparison of ≥2 things. Show ALL rows, never truncate.
-  "comparison_panels": [{ "left": { "title": "...", "content": "..." }, "right": { "title": "...", "content": "..." } }]
-  "compact_grid": [{ "primary": "symbol/label", "secondary": "description" }] — for SI units, postulates, lists of items
-  "formulae": [{ "label": "Name", "formula": "expression with subscripts ₀₁₂₃ and superscripts ⁰¹²³⁻⁺" }]
-  "step_method": { "label": "HOW TO...", "steps": ["Step 1...", "Step 2..."] }
-  "solved_example": { "mark_pattern": "3-mark numerical", "question": "...", "steps": ["..."], "answer": "bold final answer" }
-  "common_mistake": "One specific error students make + correct approach"
-  "exam_tip": "Cite specific marks + years. Never vague 'this is important'."
-
-Also fill: summary (3-5 crisp sentences, NOT "This chapter introduces..."),
+Fill the "slides" array (${slideRange} slides covering the ENTIRE chapter — use MORE slides for chapters with many topics).
+Also fill: summary (3-5 crisp sentences — the top-level main ideas of the WHOLE chapter for quick reference, NOT "This chapter introduces..."),
 keyPoints (8-10 one-line bullets), definitions (ALL key terms), flashcards (10 cards).
 Leave sections/tables/recallQuestions/conceptConnections/knowledgeCards/examOutline as empty arrays — all content goes in slides.`,
 
@@ -1659,6 +1725,20 @@ For CONCEPT MAP: every topic must appear as a node or connection.
 `
         : '';
 
+      // Derivations the CBSE pattern data already knows are asked for this chapter
+      const derivationHints = notesChapterCtx ? [...new Set([
+        ...(notesChapterCtx.questionPatterns || []),
+        ...(notesChapterCtx.highYieldTopics || []),
+        ...(notesChapterCtx.ncertTopics || []),
+        ...Object.values(notesChapterCtx.pyqBank || {}).flat(),
+      ].filter((t: string) => /deriv|prove|show that|obtain (an |the )?(expression|relation)/i.test(t)))].slice(0, 15) : [];
+      const derivationBlock = noteStyle === 'smart' && derivationHints.length
+        ? `
+KNOWN CBSE DERIVATIONS FOR THIS CHAPTER (minimum set — include ALL of these, plus any other NCERT derivation in the chapter):
+${derivationHints.map((t, i) => `  ${i + 1}. ${t}`).join('\n')}
+`
+        : '';
+
       const prompt = `${langDirective}
 
 You generate revision notes in the style of a ${board_} topper's handwritten notebook — the kind every student wants to photocopy. You are NOT explaining or teaching. You are producing clean, exam-ready reference notes for ${lvl} ${subject}.
@@ -1668,6 +1748,7 @@ Subject: ${subject}
 Note Style: ${noteStyle.toUpperCase()}
 Class: ${lvl}  |  Board: ${board_}
 ${notesNcertTopics}
+${derivationBlock}
 ${sourceBlock}
 NOTE STYLE INSTRUCTIONS:
 ${styleInstructions[noteStyle] || styleInstructions['smart']}
@@ -1736,7 +1817,8 @@ Return ONLY valid JSON matching this EXACT structure (no markdown, no backticks)
   "noteStyle": "${noteStyle}",
   "summary": "detailed summary paragraph(s)",
   "keyPoints": ["specific point 1", "specific point 2"],
-  "definitions": [{ "term": "Term", "meaning": "Clear meaning with example" }],
+  "definitions": [{ "term": "Term", "meaning": "Clear meaning with example" }],${noteStyle === 'smart' ? `
+  "derivation_checklist": ["Every derivation / proof in this NCERT chapter, one title each — [] if the chapter has none"],` : ''}
   "slides": [],
   "sections": [
     {
@@ -1773,7 +1855,80 @@ Return ONLY valid JSON matching this EXACT structure (no markdown, no backticks)
       logger.info('Calling Gemini for study notes', { requestId: req.requestId, meta: { noteStyle, chapterTitle } });
 
       // ── Queue-wrapped AI generation ─────────────────────────────────
-      const parsed = await enqueueAIRequest(() => callGemini([prompt]), req.requestId);
+      // SMART notes for chapters with an NCERT topic list are generated in
+      // PARALLEL: the topic list is split into up to 4 parts, each written by its
+      // own Gemini call, plus one small call for summary / key points / flashcards.
+      // One giant response took 50-200s (output length is the bottleneck); parts
+      // finish in ~20-35s together, and a writer with only 3-4 topics doesn't skip any.
+      const chapterTopics: string[] = notesChapterCtx?.ncertTopics || [];
+      const useParallel = noteStyle === 'smart' && !sourceContent && chapterTopics.length >= 4;
+      let parsed: any;
+      if (useParallel) {
+        const partCount = Math.min(4, Math.ceil(chapterTopics.length / 3));
+        const parts: string[][] = Array.from({ length: partCount }, (_, p) =>
+          chapterTopics.slice(Math.round((p * chapterTopics.length) / partCount), Math.round(((p + 1) * chapterTopics.length) / partCount)));
+        const promptBody = prompt.slice(0, prompt.indexOf('Return ONLY valid JSON matching this EXACT structure'));
+
+        const partPrompt = (topics: string[], p: number) => `${promptBody}
+══════════════════════════════════════════════
+PARALLEL PART ${p + 1} OF ${partCount} — IMPORTANT, this overrides the slide count and whole-chapter instructions above.
+Other writers are producing the pages for the rest of the chapter at the same time. Write Cornell pages ONLY for these NCERT topics, in this order:
+${topics.map((t, i) => `  ${i + 1}. ${t}`).join('\n')}
+
+• Every topic above MUST appear — its own page, or sharing a page with a closely related neighbour (${topics.length}-${topics.length + 1} pages in total).
+• Cover ALL the NCERT content of these topics: definitions, laws, formulae, tables, solved examples, and EVERY derivation / proof the textbook gives for them.
+• Do NOT write pages for any other topic of the chapter.
+• Every item you put in "derivation_checklist" MUST be written out in full in the "derivations" of the matching page — list only derivations you actually include.
+
+Return ONLY valid JSON (no markdown): { "derivation_checklist": ["each derivation/proof NCERT gives for THESE topics — [] if none"], "slides": [ ...Cornell pages... ] }`;
+
+        const metaPrompt = `${langDirective}
+
+For ${lvl} ${subject} (${board_}), NCERT chapter "${chapterTitle}", whose topics are:
+${chapterTopics.map((t, i) => `  ${i + 1}. ${t}`).join('\n')}
+
+Write the chapter-level revision summary in the style of a topper's notebook (no filler, NCERT wording, plain text, no markdown):
+- "summary": 3-5 crisp sentences with the top-level main ideas of the WHOLE chapter for quick reference (NOT "This chapter introduces...")
+- "keyPoints": 8-10 one-line exam facts
+- "definitions": ALL key terms of the chapter as { "term", "meaning" } — NCERT wording + example in brackets, plain text
+- "flashcards": 10 cards { "front", "back" } from different angles: definition, numerical, formula, mistake, comparison
+
+Return ONLY valid JSON: { "summary": "...", "keyPoints": [], "definitions": [], "flashcards": [] }`;
+
+        // One retry per failed call so a single slow/failed part doesn't sink the chapter
+        const run = (p: string, id: string) =>
+          enqueueAIRequest(() => callGemini([p], 'application/json', { quality: true }), id)
+            .catch(() => enqueueAIRequest(() => callGemini([p], 'application/json', { quality: true }), `${id}-retry`));
+
+        const t0 = Date.now();
+        const [metaRes, ...partRes] = await Promise.allSettled([
+          run(metaPrompt, `${req.requestId}-meta`),
+          ...parts.map((topics, p) => run(partPrompt(topics, p), `${req.requestId}-part${p + 1}`)),
+        ]);
+        const okParts = partRes.filter(r => r.status === 'fulfilled') as PromiseFulfilledResult<any>[];
+        if (okParts.length === 0) {
+          throw (partRes[0] as PromiseRejectedResult).reason;
+        }
+        const failedTopics = partRes.flatMap((r, p) => (r.status === 'rejected' ? parts[p] : []));
+        if (failedTopics.length) {
+          logger.warn('Some note parts failed — returning partial notes', { requestId: req.requestId, meta: { failedTopics } });
+        }
+        const meta = metaRes.status === 'fulfilled' ? metaRes.value : {};
+        parsed = {
+          ...meta,
+          slides: okParts.flatMap(r => r.value?.slides || []),
+          derivation_checklist: okParts.flatMap(r => r.value?.derivation_checklist || []),
+          // Topics whose part failed — the client offers a regenerate, and we don't cache
+          incompleteTopics: failedTopics,
+        };
+        logger.info('Parallel SMART notes assembled', {
+          requestId: req.requestId,
+          durationMs: Date.now() - t0,
+          meta: { parts: partCount, slides: parsed.slides.length, failedTopics: failedTopics.length },
+        });
+      } else {
+        parsed = await enqueueAIRequest(() => callGemini([prompt], 'application/json', { quality: true }), req.requestId);
+      }
 
       // Ensure required arrays exist
       parsed.slides          = parsed.slides          || [];
@@ -1793,7 +1948,7 @@ Return ONLY valid JSON matching this EXACT structure (no markdown, no backticks)
       const MIN_SLIDES = ncertTopicCount > 0
         ? Math.max(4, Math.ceil(dynamicSlideCount * 0.6))
         : 4;
-      if (noteStyle === 'smart' && parsed.slides.length > 0 && parsed.slides.length < MIN_SLIDES) {
+      if (noteStyle === 'smart' && !useParallel && parsed.slides.length > 0 && parsed.slides.length < MIN_SLIDES) {
         logger.info('Auto-continuing truncated SMART notes', {
           requestId: req.requestId,
           meta: { slidesReceived: parsed.slides.length, target: MIN_SLIDES, chapter: chapterTitle },
@@ -1813,10 +1968,10 @@ The chapter needs ${moreNeeded} MORE slides (target: ${targetTotal} total) to co
 
 Return valid JSON: { "slides": [ ...additional slides only... ] }
 
-Use the same dense slide format: definitions, tables, comparison_panels, compact_grid, formulae, step_method, solved_example, common_mistake, exam_tip. Each slide must have 7-12 info units.`;
+Use the same Cornell slide format: title, cue_points, cue_questions, diagram_cue, notes_points, summary, plus optional definitions, tables, comparison_panels, compact_grid, formulae, step_method, solved_example, derivations, common_mistake, exam_tip. Each slide must have 7-12 info units.`;
 
         try {
-          const continuation = await enqueueAIRequest(() => callGemini([continuePrompt]), `${req.requestId}-continue`);
+          const continuation = await enqueueAIRequest(() => callGemini([continuePrompt], 'application/json', { quality: true }), `${req.requestId}-continue`);
           const extraSlides = continuation?.slides || [];
           if (extraSlides.length > 0) {
             parsed.slides = [...parsed.slides, ...extraSlides];
@@ -1828,14 +1983,72 @@ Use the same dense slide format: definitions, tables, comparison_panels, compact
         }
       }
 
+      // ── Derivation coverage check (SMART, science/maths) ───────────
+      // The model lists every NCERT derivation in "derivation_checklist" first;
+      // anything listed but missing from the slides is generated in one follow-up
+      // call and attached to the slide whose topic it belongs to.
+      const isDerivationSubject = ['science', 'physics', 'chemistry', 'mathematics', 'maths'].includes(subjectLC);
+      if (noteStyle === 'smart' && isDerivationSubject && parsed.slides.length > 0) {
+        const norm = (t: string) => String(t || '').toLowerCase().replace(/\d-marks?:?/g, ' ').replace(/\b(derivations?|derive[sd]?|proofs?|prove|of|the|for|a|an|and|expression|relation|using|its)\b/g, ' ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(/\s+/).filter(w => w.length > 1);
+        const overlap = (a: string, b: string) => {
+          const A = new Set(norm(a)), B = norm(b);
+          if (!A.size || !B.length) return 0;
+          return B.filter(w => A.has(w)).length / Math.min(A.size, B.length);
+        };
+        const haveTitles: string[] = parsed.slides.flatMap((sl: any) => (sl?.derivations || []).map((d: any) => d?.title || ''));
+        // Parallel parts already received the hints in their prompts — check only the
+        // writers' own checklists so loosely-worded hints don't trigger extra calls.
+        const checklist: string[] = [...(Array.isArray(parsed.derivation_checklist) ? parsed.derivation_checklist : []), ...(useParallel ? [] : derivationHints)];
+        const missing = [...new Set(checklist.filter(item => item && !haveTitles.some(t => overlap(t, item) >= 0.6)))].slice(0, 8);
+        if (missing.length > 0) {
+          logger.info('Generating missing derivations', { requestId: req.requestId, meta: { missing } });
+          const slideTitles = parsed.slides.map((sl: any) => sl?.title || '');
+          const derivPrompt = `For ${lvl} ${subject}, NCERT chapter "${chapterTitle}" (${board_} board), write complete exam-ready derivations for:
+${missing.map((m, i) => `${i + 1}. ${m}`).join('\n')}
+
+ALREADY IN THE NOTES — do NOT repeat these (skip any item above that is the same derivation in other words):
+${haveTitles.map(t => `- ${t}`).join('\n') || '- (none)'}
+
+Also skip any item that is not actually derived/proved in the NCERT textbook or duplicates another item.
+Each derivation: 4-10 numbered steps, one equation or reasoning move per step, nothing skipped, Unicode math (subscripts ₀₁₂, superscripts ²³, Greek letters), no LaTeX, no markdown.
+"slide_title" MUST be copied exactly from this list (the topic the derivation belongs to): ${JSON.stringify(slideTitles)}
+
+Return ONLY JSON: { "derivations": [{ "slide_title": "...", "title": "Derivation of …", "marks": "3-mark or 5-mark", "given": "starting law / assumptions", "steps": ["…"], "result": "final result" }] }`;
+          try {
+            // Capped so a slow follow-up can never hold the whole chapter hostage —
+            // on timeout the notes ship with the derivations the parts produced.
+            const extra: any = await Promise.race([
+              enqueueAIRequest(() => callGemini([derivPrompt], 'application/json', { quality: true }), `${req.requestId}-derivations`),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('derivation follow-up timed out after 25s')), 25_000)),
+            ]);
+            for (const d of (extra?.derivations || [])) {
+              if (!d?.steps?.length || haveTitles.some(t => overlap(t, d.title) >= 0.6)) continue;
+              let idx = slideTitles.indexOf(d.slide_title);
+              if (idx < 0) {
+                const scores = slideTitles.map((t: string) => overlap(t, `${d.slide_title} ${d.title}`));
+                idx = scores.indexOf(Math.max(...scores));
+              }
+              const slide = parsed.slides[Math.max(0, idx)];
+              const { slide_title, ...derivation } = d;
+              slide.derivations = [...(slide.derivations || []), derivation];
+              haveTitles.push(d.title);
+            }
+          } catch (derivErr: any) {
+            // Non-fatal — the notes still have the derivations the first pass produced
+            logger.warn('Missing-derivation pass failed', { requestId: req.requestId, meta: { error: derivErr?.message } });
+          }
+        }
+      }
+
       parsed.noteStyle       = noteStyle;
       parsed.subject         = subject;
       parsed.topic           = chapterTitle;
       parsed.language        = isHindi ? 'hi' : 'en';
-      parsed.noteVersion     = parsed.slides?.length > 0 ? 2 : 1;
+      parsed.noteVersion     = parsed.slides?.some((s: any) => s?.cue_points?.length || s?.cue_questions?.length) ? 4
+                             : parsed.slides?.length > 0 ? 2 : 1;
 
-      // ── Cache store ─────────────────────────────────────────────────
-      cacheSet(cacheKey, parsed);
+      // ── Cache store (complete notes only) ───────────────────────────
+      if (!parsed.incompleteTopics?.length) cacheSet(cacheKey, parsed);
 
       res.json({ success: true, data: parsed });
     } catch (err: any) {
